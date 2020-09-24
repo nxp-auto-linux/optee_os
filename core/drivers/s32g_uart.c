@@ -72,11 +72,25 @@ static int s32g_uart_getchar(struct serial_chip *chip)
 static void s32g_uart_putc(struct serial_chip *chip, int ch)
 {
 	vaddr_t base = chip_to_base(chip);
+	uint32_t uartsr;
 
-	while (io_read32(base + UARTSR) & UARTSR_DTFTFF)
-		;
+	/* UART is in FIFO mode */
+	if ((io_read32(base + UARTCR) & UARTCR_TFBM)) {
+		while (io_read32(base + UARTSR) & UARTSR_DTFTFF)
+			;
+		io_write8(base + BDRL, ch);
 
-	io_write8(base + BDRL, ch);
+    /* UART is in Buffer mode */
+	} else {
+		io_write8(base + BDRL, ch);
+		while (!(uartsr = io_read32(base + UARTSR) & UARTSR_DTFTFF))
+			;
+		/* In Buffer Mode the DTFTFF bit of UARTSR register
+		 * has to be cleared in software
+		 */
+		uartsr &= ~(UARTSR_DTFTFF);
+		io_write32(base + UARTSR, uartsr);
+	}
 }
 
 static const struct serial_ops s32g_uart_ops = {
