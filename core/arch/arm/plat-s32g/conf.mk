@@ -27,6 +27,9 @@ $(call force,CFG_PM_STUBS,y)
 # Configuring secure time source
 $(call force,CFG_SECURE_TIME_SOURCE_CNTPCT,y)
 
+# Inject OP-TEE nodes in the non-secure U-boot DTB
+$(call force,CFG_DT,y)
+
 supported-ta-targets = ta_arm64
 
 # Security-related configurations
@@ -48,4 +51,5 @@ CFG_TZDRAM_SIZE ?= 	0x01400000 # 20Mb
 # Shared non-secure memory at the end of the TEE Reserved Space Zone
 CFG_SHMEM_START ?=	($(CFG_TZDRAM_START) + $(CFG_TZDRAM_SIZE))
 CFG_SHMEM_SIZE ?= 	0x00200000 # 2Mb
-CFG_CORE_RESERVED_SHM=y
+CFG_CORE_RESERVED_SHM ?= y
+CFG_CORE_DYN_SHM ?= n
