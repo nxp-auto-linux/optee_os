@@ -1,3 +1,5 @@
+# Copyright 2020-2021 NXP
+
 PLATFORM_FLAVOR ?= s32g274aevb
 
 include core/arch/arm/cpu/cortex-armv8-0.mk
@@ -35,12 +37,15 @@ CFG_WITH_STACK_CANARIES ?= y
 # Establish UART connectivity
 CFG_S32G_UART ?= y
 
-CFG_DRAM_END ?= 0xffffffff
-CFG_SM_SIZE ?= 	0x00200000 # 2MB
-CFG_TEE_SIZE ?= 0x01600000 # 22MB
+CFG_DRAM_END ?= 	0xffffffff
+CFG_SM_SIZE ?= 		0x00200000 # 2MB
+CFG_UBOOT_SIZE ?= 	0x00600000 # 6MB
+CFG_TEE_SIZE ?= 	0x01600000 # 22MB
 
 # Place the TZ Mem Area at the end of DRAM, just before the Secure Monitor Mem Area
-CFG_TZDRAM_START ?=	($(CFG_DRAM_END) - $(CFG_SM_SIZE) - $(CFG_TEE_SIZE) + 1)
+# and U-Boot (BL33) Area
+CFG_TZDRAM_START ?=	($(CFG_DRAM_END) - $(CFG_SM_SIZE) - $(CFG_UBOOT_SIZE) - \
+			$(CFG_TEE_SIZE) + 1)
 CFG_TZDRAM_SIZE ?= 	0x01400000 # 20MB
 
 # Shared non-secure memory at the end of the TEE Reserved Space Zone
