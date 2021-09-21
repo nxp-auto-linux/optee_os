@@ -10,8 +10,8 @@
 #include <mm/core_mmu.h>
 #include <platform_config.h>
 
-static struct gic_data gic_data;
-static struct s32_uart_data console_data;
+static struct gic_data gic_data __nex_bss;
+static struct s32_uart_data console_data __nex_bss;
 
 register_phys_mem(MEM_AREA_IO_NSEC, CONSOLE_UART_BASE,
 		  CONSOLE_UART_SIZE);
