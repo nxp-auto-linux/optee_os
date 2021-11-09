@@ -8,9 +8,16 @@ $(call force,CFG_WITH_ARM_TRUSTED_FW,y)
 $(call force,CFG_WITH_PAGER,n)
 
 # CPU-related configurations
+ifeq ($(PLATFORM_FLAVOR), s32g2)
 $(call force,CFG_TEE_CORE_NB_CORE,4)
 $(call force,CFG_CORE_CLUSTER_SHIFT,1)
 $(call force,CFG_NUM_THREADS,4)
+endif
+ifeq ($(PLATFORM_FLAVOR), s32g3)
+$(call force,CFG_TEE_CORE_NB_CORE,8)
+$(call force,CFG_CORE_CLUSTER_SHIFT,2)
+$(call force,CFG_NUM_THREADS,8)
+endif
 
 # GIC is configured in ATF. OP-TEE only needs
 # to map this configurations into its memory
