@@ -32,7 +32,7 @@ srcs-$(CFG_STPMIC1) += stpmic1.c
 srcs-$(CFG_BCM_HWRNG) += bcm_hwrng.c
 srcs-$(CFG_BCM_SOTP) += bcm_sotp.c
 srcs-$(CFG_BCM_GPIO) += bcm_gpio.c
-srcs-$(CFG_S32G_UART) += s32g_uart.c
+srcs-$(CFG_S32_UART) += s32_uart.c
 
 subdirs-y += crypto
 subdirs-$(CFG_BNXT_FW) += bnxt

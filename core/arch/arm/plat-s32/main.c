@@ -1,18 +1,18 @@
 // SPDX-License-Identifier: BSD-3-Clause
 /*
- * Copyright 2020-2021 NXP
+ * Copyright 2020-2022 NXP
  */
 
 #include <console.h>
 #include <drivers/gic.h>
-#include <drivers/s32g_uart.h>
+#include <drivers/s32_uart.h>
 #include <kernel/boot.h>
 #include <kernel/panic.h>
 #include <mm/core_mmu.h>
 #include <platform_config.h>
 
 static struct gic_data gic_data __nex_bss;
-static struct s32g_uart_data console_data __nex_bss;
+static struct s32_uart_data console_data __nex_bss;
 
 register_phys_mem(MEM_AREA_IO_NSEC, CONSOLE_UART_BASE,
 		  CONSOLE_UART_SIZE);
@@ -39,6 +39,6 @@ void main_init_gic(void)
 
 void console_init(void)
 {
-	s32g_uart_init(&console_data, CONSOLE_UART_BASE);
+	s32_uart_init(&console_data, CONSOLE_UART_BASE);
 	register_serial_console(&console_data.chip);
 }

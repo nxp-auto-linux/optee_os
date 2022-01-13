@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: BSD-3-Clause
 /*
- * Copyright 2020 NXP
+ * Copyright 2020,2022 NXP
  */
 
-#include <drivers/s32g_uart.h>
+#include <drivers/s32_uart.h>
 #include <io.h>
 #include <util.h>
 
@@ -49,17 +49,17 @@
 
 static vaddr_t chip_to_base(struct serial_chip *chip)
 {
-	struct s32g_uart_data *pd =
-		container_of(chip, struct s32g_uart_data, chip);
+	struct s32_uart_data *pd =
+		container_of(chip, struct s32_uart_data, chip);
 
 	return io_pa_or_va(&pd->base);
 }
 
-static void s32g_uart_flush(struct serial_chip *chip)
+static void s32_uart_flush(struct serial_chip *chip)
 {
 }
 
-static int s32g_uart_getchar(struct serial_chip *chip)
+static int s32_uart_getchar(struct serial_chip *chip)
 {
 	vaddr_t base = chip_to_base(chip);
 
@@ -69,7 +69,7 @@ static int s32g_uart_getchar(struct serial_chip *chip)
 	return io_read8(base + BDRM);
 }
 
-static void s32g_uart_putc(struct serial_chip *chip, int ch)
+static void s32_uart_putc(struct serial_chip *chip, int ch)
 {
 	vaddr_t base = chip_to_base(chip);
 	uint32_t uartsr;
@@ -93,14 +93,14 @@ static void s32g_uart_putc(struct serial_chip *chip, int ch)
 	}
 }
 
-static const struct serial_ops s32g_uart_ops = {
-	.flush = s32g_uart_flush,
-	.getchar = s32g_uart_getchar,
-	.putc = s32g_uart_putc,
+static const struct serial_ops s32_uart_ops = {
+	.flush = s32_uart_flush,
+	.getchar = s32_uart_getchar,
+	.putc = s32_uart_putc,
 };
 
-void s32g_uart_init(struct s32g_uart_data *pd, paddr_t pbase)
+void s32_uart_init(struct s32_uart_data *pd, paddr_t pbase)
 {
 	pd->base.pa = pbase;
-	pd->chip.ops = &s32g_uart_ops;
+	pd->chip.ops = &s32_uart_ops;
 }

@@ -1,4 +1,4 @@
-# Copyright 2020-2021 NXP
+# Copyright 2020-2022 NXP
 
 PLATFORM_FLAVOR ?= s32g274aevb
 
@@ -42,7 +42,7 @@ CFG_TA_ASLR ?= y
 CFG_WITH_STACK_CANARIES ?= y
 
 # Establish UART connectivity
-CFG_S32G_UART ?= y
+CFG_S32_UART ?= y
 
 CFG_DRAM_END ?= 	0xffffffff
 CFG_SM_SIZE ?= 		0x00200000 # 2MB
