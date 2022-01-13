@@ -1,6 +1,10 @@
 # Copyright 2020-2022 NXP
 
-PLATFORM_FLAVOR ?= s32g274aevb
+PLATFORM_FLAVOR ?= s32g2
+
+s32-common-flavorlist =  \
+	s32g2 \
+	s32r
 
 include core/arch/arm/cpu/cortex-armv8-0.mk
 
@@ -12,15 +16,16 @@ $(call force,CFG_WITH_ARM_TRUSTED_FW,y)
 $(call force,CFG_WITH_PAGER,n)
 
 # CPU-related configurations
-ifeq ($(PLATFORM_FLAVOR), s32g2)
+ifneq (,$(filter $(PLATFORM_FLAVOR),$(s32-common-flavorlist)))
 $(call force,CFG_TEE_CORE_NB_CORE,4)
 $(call force,CFG_CORE_CLUSTER_SHIFT,1)
 $(call force,CFG_NUM_THREADS,4)
-endif
-ifeq ($(PLATFORM_FLAVOR), s32g3)
+else ifeq ($(PLATFORM_FLAVOR), s32g3)
 $(call force,CFG_TEE_CORE_NB_CORE,8)
 $(call force,CFG_CORE_CLUSTER_SHIFT,2)
 $(call force,CFG_NUM_THREADS,8)
+else
+$(error Invalid PLATFORM_FLAVOR "$(PLATFORM_FLAVOR)")
 endif
 
 # GIC is configured in ATF. OP-TEE only needs
