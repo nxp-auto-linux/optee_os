@@ -10,6 +10,7 @@ include core/arch/arm/cpu/cortex-armv8-0.mk
 
 $(call force,CFG_ARM64_core,y)
 $(call force,CFG_CORE_LARGE_PHYS_ADDR,y)
+$(call force,CFG_CORE_ARM64_PA_BITS,40)
 $(call force,CFG_WITH_ARM_TRUSTED_FW,y)
 
 # Enabling the Pager requires access to SRAM
@@ -64,4 +65,3 @@ CFG_TZDRAM_SIZE ?= 	0x01400000 # 20MB
 CFG_SHMEM_START ?=	($(CFG_TZDRAM_START) + $(CFG_TZDRAM_SIZE))
 CFG_SHMEM_SIZE ?= 	0x00200000 # 2MB
 CFG_CORE_RESERVED_SHM ?= y
-CFG_CORE_DYN_SHM ?= n
