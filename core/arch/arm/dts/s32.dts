@@ -1,0 +1,10 @@
+// SPDX-License-Identifier: BSD-3-Clause
+/*
+ * Copyright 2022 NXP
+ */
+/dts-v1/;
+
+/ {
+	model = "NXP S32 Family Boards";
+	compatible = "nxp,s32";
+};
