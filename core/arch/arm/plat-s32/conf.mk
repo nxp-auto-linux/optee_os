@@ -67,3 +67,15 @@ CFG_TZDRAM_SIZE ?= 	0x01400000 # 20MB
 CFG_SHMEM_START ?=	($(CFG_TZDRAM_START) + $(CFG_TZDRAM_SIZE))
 CFG_SHMEM_SIZE ?= 	0x00200000 # 2MB
 CFG_CORE_RESERVED_SHM ?= y
+
+# HSE Crypto Driver disabled by default
+CFG_CRYPTO_DRIVER ?= n
+CFG_CRYPTO_DRIVER_DEBUG ?= 0
+
+ifeq ($(CFG_CRYPTO_DRIVER), y)
+$(call force,CFG_NXP_HSE,y)
+# There are 4 channels numbered 0 to 3.
+# By default, the third channel is used in OP-TEE.
+CFG_HSE_MU_ID ?= 2
+$(call force,CFG_HSE_MU_INST,"mu$(CFG_HSE_MU_ID)b")
+endif
