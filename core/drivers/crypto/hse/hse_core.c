@@ -12,8 +12,10 @@
 #include <kernel/interrupt.h>
 #include <kernel/spinlock.h>
 #include <malloc.h>
+#include <mm/core_memprot.h>
 #include <string.h>
 #include <tee_api_types.h>
+#include <tee/cache.h>
 #include <trace.h>
 
 /**
@@ -24,6 +26,7 @@
  * @mu: MU instance handle returned by lower abstraction layer
  * @type[n]: designated type of service channel n
  * @tx_lock: lock used for service request transmission
+ * @firmware_version: firmware version
  */
 struct hse_drvdata {
 	struct {
@@ -35,6 +38,7 @@ struct hse_drvdata {
 	bool channel_busy[HSE_NUM_CHANNELS];
 	enum hse_ch_type type[HSE_NUM_CHANNELS];
 	unsigned int tx_lock;
+	struct hse_attr_fw_version firmware_version;
 };
 
 static struct hse_drvdata *drv;
@@ -190,6 +194,44 @@ static inline void hse_config_channels(void)
 	}
 }
 
+/**
+ * hse_check_fw_version - retrieve firmware version
+ *
+ * Attribute buffer is encoded into the descriptor to get around HSE memory
+ * access limitations and avoid DMA copy in upper range of 32-bit address space.
+ */
+static TEE_Result hse_check_fw_version(void)
+{
+	struct hse_srv_desc srv_desc;
+	TEE_Result err;
+	struct hse_attr_fw_version *srv_rsp;
+	paddr_t srv_paddr;
+
+	srv_rsp = malloc(sizeof(*srv_rsp));
+	srv_paddr = virt_to_phys(srv_rsp);
+
+	cache_operation(TEE_CACHECLEAN, srv_rsp, sizeof(*srv_rsp));
+
+	srv_desc.srv_id = HSE_SRV_ID_GET_ATTR;
+	srv_desc.get_attr_req.attr_id = HSE_FW_VERSION_ATTR_ID;
+	srv_desc.get_attr_req.attr_len = sizeof(struct hse_attr_fw_version);
+	srv_desc.get_attr_req.attr = srv_paddr;
+
+	err = hse_srv_req_sync(HSE_CHANNEL_ADM, &srv_desc);
+	if (err) {
+		DMSG("request failed: %d", err);
+		return err;
+	}
+
+	cache_operation(TEE_CACHEINVALIDATE, srv_rsp, sizeof(*srv_rsp));
+
+	memcpy(&drv->firmware_version, srv_rsp, sizeof(*srv_rsp));
+
+	free(srv_rsp);
+
+	return TEE_SUCCESS;
+}
+
 static TEE_Result crypto_driver_init(void)
 {
 	TEE_Result ret = TEE_ERROR_GENERIC;
@@ -216,6 +258,15 @@ static TEE_Result crypto_driver_init(void)
 	hse_config_channels();
 
 	drv->tx_lock = SPINLOCK_UNLOCK;
+
+	ret = hse_check_fw_version();
+	if (ret)
+		return ret;
+	DMSG("%s firmware, version %d.%d.%d\n",
+	     drv->firmware_version.fw_type == 0 ? "standard" :
+	     (drv->firmware_version.fw_type == 1 ? "premium" : "custom"),
+	     drv->firmware_version.major, drv->firmware_version.minor,
+	     drv->firmware_version.patch);
 
 	IMSG("HSE is successfully initialized");
 
