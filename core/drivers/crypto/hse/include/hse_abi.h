@@ -74,6 +74,37 @@ enum hse_srv_response {
 };
 
 /**
+ * enum hse_srv_id - HSE service ID
+ * @HSE_SRV_ID_GET_ATTR: get attribute, such as firmware version
+ */
+enum hse_srv_id {
+	HSE_SRV_ID_GET_ATTR = 0x00A50002ul,
+};
+
+/**
+ * enum hse_attr - HSE attribute
+ * @HSE_FW_VERSION_ATTR_ID: firmware version
+ */
+enum hse_attr {
+	HSE_FW_VERSION_ATTR_ID = 1u,
+};
+
+/**
+ * struct hse_attr_fw_version - firmware version
+ * @fw_type: attribute ID
+ * @major: major revision
+ * @minor: minor revision
+ * @patch: patch version
+ */
+struct hse_attr_fw_version {
+	uint8_t reserved[2];
+	uint16_t fw_type;
+	uint8_t major;
+	uint8_t minor;
+	uint16_t patch;
+} __packed;
+
+/**
  * struct hse_get_attr_srv - get attribute, such as firmware version
  * @attr_id: attribute ID
  * @attr_len: attribute length, in bytes
