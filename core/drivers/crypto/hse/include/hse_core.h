@@ -23,6 +23,21 @@ enum hse_ch_type {
 	HSE_CH_TYPE_STREAM = 2u,
 };
 
+/**
+ * struct hse_key - HSE key slot
+ * @entry: list position
+ * @handle: key handle
+ * @type: key type
+ */
+struct hse_key {
+	uint32_t handle;
+	enum hse_key_type type;
+	bool acquired;
+};
+
 TEE_Result hse_srv_req_sync(uint8_t channel, const void *srv_desc);
+
+struct hse_key *hse_key_slot_acquire(enum hse_key_type type);
+void hse_key_slot_release(struct hse_key *slot);
 
 #endif /* HSE_CORE_H */

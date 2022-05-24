@@ -25,7 +25,10 @@
  * @srv_desc[n].id: current service request ID for channel n
  * @mu: MU instance handle returned by lower abstraction layer
  * @type[n]: designated type of service channel n
+ * @aes_key_ring: AES key slots currently available
+ * @aes_key_ring_size: size of AES key ring
  * @tx_lock: lock used for service request transmission
+ * @key_ring_lock: lock used for key slot acquisition
  * @firmware_version: firmware version
  */
 struct hse_drvdata {
@@ -37,7 +40,10 @@ struct hse_drvdata {
 	void *mu;
 	bool channel_busy[HSE_NUM_CHANNELS];
 	enum hse_ch_type type[HSE_NUM_CHANNELS];
+	struct hse_key *aes_key_ring;
+	size_t aes_key_ring_size;
 	unsigned int tx_lock;
+	unsigned int key_ring_lock;
 	struct hse_attr_fw_version firmware_version;
 };
 
@@ -164,6 +170,115 @@ TEE_Result hse_srv_req_sync(uint8_t channel, const void *srv_desc)
 }
 
 /**
+ * hse_key_ring_init - initialize all keys in a specific key group
+ * @key_ring: output key ring
+ * @group_id: key group ID
+ * @group_size: key group size
+ *
+ * Return: allocated key ring array, NULL for failed key ring allocation
+ */
+static struct hse_key *hse_key_ring_init(enum hse_key_type type,
+					 uint8_t group_id, uint8_t group_size)
+{
+	struct hse_key *ring;
+	unsigned int i;
+
+	if (!group_size)
+		return NULL;
+
+	ring = malloc(group_size * sizeof(*ring));
+	if (!ring)
+		return NULL;
+
+	for (i = 0; i < group_size; i++) {
+		ring[i].handle = HSE_KEY_HANDLE(group_id, i);
+		ring[i].type = type;
+		ring[i].acquired = false;
+	}
+
+	DMSG("key ring: group id %d, size %d\n", group_id, group_size);
+
+	return ring;
+}
+
+/**
+ * hse_key_ring_free - remove all keys in a specific key group
+ * @key_ring: input key ring
+ */
+static inline void hse_key_ring_free(struct hse_key *key_ring)
+{
+	if (!key_ring)
+		return;
+
+	free(key_ring);
+}
+
+/**
+ * hse_key_slot_acquire - acquire a HSE key slot
+ * @type: key type
+ *
+ * Return: key slot of specified type if available, NULL otherwise
+ */
+struct hse_key *hse_key_slot_acquire(enum hse_key_type type)
+{
+	struct hse_key *key_ring, *slot = NULL;
+	size_t key_ring_size, i;
+	uint32_t exceptions;
+
+	switch (type) {
+	case HSE_KEY_TYPE_AES:
+		key_ring = drv->aes_key_ring;
+		key_ring_size = drv->aes_key_ring_size;
+		break;
+	default:
+		return NULL;
+	}
+
+	/* remove key slot from ring */
+	exceptions = cpu_spin_lock_xsave(&drv->key_ring_lock);
+	for (i = 0; i < key_ring_size;  i++) {
+		if (!key_ring[i].acquired) {
+			key_ring[i].acquired = true;
+			slot = &key_ring[i];
+			break;
+		}
+	}
+	cpu_spin_unlock_xrestore(&drv->key_ring_lock, exceptions);
+
+	return slot;
+}
+
+/**
+ * hse_key_slot_release - release a HSE key slot
+ * @slot: key slot
+ */
+void hse_key_slot_release(struct hse_key *slot)
+{
+	struct hse_key *key_ring;
+	size_t key_ring_size, i;
+	uint32_t exceptions;
+
+	switch (slot->type) {
+	case HSE_KEY_TYPE_AES:
+		key_ring = drv->aes_key_ring;
+		key_ring_size = drv->aes_key_ring_size;
+		break;
+	default:
+		return;
+	}
+
+	/* add key slot back to ring */
+	exceptions = cpu_spin_lock_xsave(&drv->key_ring_lock);
+	for (i = 0; i < key_ring_size; i++) {
+		if (slot == &key_ring[i]) {
+			slot->acquired = false;
+			break;
+		}
+	}
+	cpu_spin_unlock_xrestore(&drv->key_ring_lock, exceptions);
+}
+
+/**
  * hse_config_channels - configure channels and manage descriptor space
  *
  * HSE firmware restricts channel zero to administrative services, all the rest
@@ -258,6 +373,7 @@ static TEE_Result crypto_driver_init(void)
 	hse_config_channels();
 
 	drv->tx_lock = SPINLOCK_UNLOCK;
+	drv->key_ring_lock = SPINLOCK_UNLOCK;
 
 	ret = hse_check_fw_version();
 	if (ret)
@@ -267,6 +383,11 @@ static TEE_Result crypto_driver_init(void)
 	     (drv->firmware_version.fw_type == 1 ? "premium" : "custom"),
 	     drv->firmware_version.major, drv->firmware_version.minor,
 	     drv->firmware_version.patch);
+
+	drv->aes_key_ring = hse_key_ring_init(HSE_KEY_TYPE_AES,
+					      CFG_HSE_AES_KEY_GROUP_ID,
+					      CFG_HSE_AES_KEY_GROUP_SIZE);
+	drv->aes_key_ring_size = CFG_HSE_AES_KEY_GROUP_SIZE;
 
 	IMSG("HSE is successfully initialized");
 

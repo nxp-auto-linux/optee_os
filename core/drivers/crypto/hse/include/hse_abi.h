@@ -10,6 +10,11 @@
 
 #define HSE_SRV_DESC_MAX_SIZE    256u /* maximum service descriptor size */
 
+#define HSE_KEY_CATALOG_ID_RAM    2u /* RAM key catalog ID */
+
+#define HSE_KEY_HANDLE(group, slot)    ((HSE_KEY_CATALOG_ID_RAM << 16u) |      \
+					((group) << 8u) | (slot))
+
 /**
  * enum hse_status - HSE status
  * @HSE_STATUS_RNG_INIT_OK: RNG initialization successfully completed
@@ -87,6 +92,14 @@ enum hse_srv_id {
  */
 enum hse_attr {
 	HSE_FW_VERSION_ATTR_ID = 1u,
+};
+
+/**
+ * enum hse_key_type - key types used by HSE
+ * @HSE_KEY_TYPE_AES: AES 128, 192 or 256-bit key
+ */
+enum hse_key_type {
+	HSE_KEY_TYPE_AES = 0x12u,
 };
 
 /**
