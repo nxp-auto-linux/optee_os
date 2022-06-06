@@ -8,6 +8,7 @@
 #include <hse_abi.h>
 #include <hse_core.h>
 #include <hse_mu.h>
+#include <hse_rng.h>
 #include <hse_util.h>
 #include <initcall.h>
 #include <kernel/interrupt.h>
@@ -384,6 +385,17 @@ static TEE_Result crypto_driver_init(void)
 					      CFG_HSE_AES_KEY_GROUP_ID,
 					      CFG_HSE_AES_KEY_GROUP_SIZE);
 	drv->aes_key_ring_size = CFG_HSE_AES_KEY_GROUP_SIZE;
+
+	if (!(status & HSE_STATUS_RNG_INIT_OK)) {
+		EMSG("HSE RNG bad state");
+		return TEE_ERROR_BAD_STATE;
+	}
+
+	ret = hse_rng_initialize();
+	if (ret) {
+		EMSG("HSE RNG Initialization failed with err 0x%x", ret);
+		return ret;
+	}
 
 	IMSG("HSE is successfully initialized");
 

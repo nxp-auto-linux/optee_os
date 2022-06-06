@@ -83,4 +83,6 @@ $(call force,CFG_HSE_MU_INST,"mu$(CFG_HSE_MU_ID)b")
 
 CFG_HSE_AES_KEY_GROUP_ID ?= 1
 CFG_HSE_AES_KEY_GROUP_SIZE ?= 12
+
+$(call force,CFG_WITH_SOFTWARE_PRNG,n)
 endif

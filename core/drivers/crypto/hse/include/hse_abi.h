@@ -84,6 +84,7 @@ enum hse_srv_response {
  */
 enum hse_srv_id {
 	HSE_SRV_ID_GET_ATTR = 0x00A50002ul,
+	HSE_SRV_ID_GET_RANDOM_NUM = 0x00000300ul,
 };
 
 /**
@@ -100,6 +101,14 @@ enum hse_attr {
  */
 enum hse_key_type {
 	HSE_KEY_TYPE_AES = 0x12u,
+};
+
+/**
+ * enum hse_rng_class - random number generation method
+ * @HSE_RNG_CLASS_PTG3: prediction resistance, reseed every 16 bytes
+ */
+enum hse_rng_class {
+	HSE_RNG_CLASS_PTG3 = 2u,
 };
 
 /**
@@ -130,11 +139,25 @@ struct hse_get_attr_srv {
 	uint64_t attr;
 } __packed;
 
+/**
+ * struct hse_rng_srv - random number generation
+ * @rng_class: random number generation method
+ * @random_num_len: length of the generated number in bytes
+ * @random_num: the address where the generated number will be stored
+ */
+struct hse_rng_srv {
+	uint8_t rng_class;
+	uint8_t reserved[3];
+	uint32_t random_num_len;
+	uint64_t random_num;
+} __packed;
+
 struct hse_srv_desc {
 	uint32_t srv_id;
 	uint8_t reserved[4];
 	union {
 		struct hse_get_attr_srv get_attr_req;
+		struct hse_rng_srv rng_req;
 	};
 } __packed;
 
