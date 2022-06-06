@@ -604,6 +604,17 @@ static TEE_Result crypto_driver_init(void)
 	if (err != TEE_SUCCESS)
 		goto out_free_sh;
 
+	if (!(status & HSE_STATUS_RNG_INIT_OK)) {
+		EMSG("HSE RNG bad state");
+		return TEE_ERROR_BAD_STATE;
+	}
+
+	err = hse_rng_initialize();
+	if (err != TEE_SUCCESS) {
+		EMSG("HSE RNG Initialization failed with err 0x%x", err);
+		goto out_free_hmac;
+	}
+
 	if (!(status & HSE_STATUS_INSTALL_OK)) {
 		EMSG("HSE Key Catalog not formatted");
 		err = TEE_ERROR_BAD_STATE;

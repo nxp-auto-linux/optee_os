@@ -14,4 +14,7 @@ TEE_Result hse_cipher_register(void);
 /* HUK Services */
 TEE_Result hse_retrieve_huk(void);
 
+/* RNG Services */
+TEE_Result hse_rng_initialize(void);
+
 #endif /* HSE_SERVICES_H */
