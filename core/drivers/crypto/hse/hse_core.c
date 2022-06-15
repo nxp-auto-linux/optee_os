@@ -5,7 +5,9 @@
 
 #include <arm.h>
 #include <atomic.h>
+#include <crypto/crypto.h>
 #include <hse_abi.h>
+#include <hse_cipher.h>
 #include <hse_core.h>
 #include <hse_mu.h>
 #include <hse_rng.h>
@@ -259,6 +261,9 @@ void hse_key_slot_release(struct hse_key *slot)
 	size_t key_ring_size, i;
 	uint32_t exceptions;
 
+	if (!slot)
+		return;
+
 	switch (slot->type) {
 	case HSE_KEY_TYPE_AES:
 		key_ring = drv->aes_key_ring;
@@ -394,6 +399,16 @@ static TEE_Result crypto_driver_init(void)
 	ret = hse_rng_initialize();
 	if (ret) {
 		EMSG("HSE RNG Initialization failed with err 0x%x", ret);
+	}
+
+	if (!(status & HSE_STATUS_INSTALL_OK)) {
+		EMSG("HSE Key Catalog not formatted");
+		return TEE_ERROR_BAD_STATE;
+	}
+
+	ret = hse_cipher_register();
+	if (ret) {
+		EMSG("HSE Cipher register failed with err 0x%x", ret);
 		return ret;
 	}
 
