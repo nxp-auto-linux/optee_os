@@ -6,6 +6,7 @@
 #include <arm.h>
 #include <atomic.h>
 #include <hse_abi.h>
+#include <hse_cipher.h>
 #include <hse_util.h>
 #include <hse_core.h>
 #include <hse_mu.h>
@@ -439,10 +440,24 @@ static TEE_Result crypto_driver_init(void)
 	if (err != TEE_SUCCESS)
 		goto out_free_mu;
 
+	if (!(status & HSE_STATUS_INSTALL_OK)) {
+		EMSG("HSE Key Catalog not formatted");
+		err = TEE_ERROR_BAD_STATE;
+		goto out_free_aes;
+	}
+
+	err = hse_cipher_register();
+	if (err != TEE_SUCCESS) {
+		EMSG("HSE Cipher register failed with err 0x%x", err);
+		goto out_free_aes;
+	}
+
 	IMSG("HSE is successfully initialized");
 
 	return TEE_SUCCESS;
 
+out_free_aes:
+	hse_key_ring_free(&drv->aes_key_ring);
 out_free_mu:
 	hse_mu_free(drv->mu);
 out_free_drv:
