@@ -8,11 +8,11 @@
 #include <hse_abi.h>
 #include <hse_core.h>
 #include <hse_mu.h>
+#include <hse_util.h>
 #include <initcall.h>
 #include <kernel/interrupt.h>
 #include <kernel/spinlock.h>
 #include <malloc.h>
-#include <mm/core_memprot.h>
 #include <string.h>
 #include <tee_api_types.h>
 #include <tee/cache.h>
@@ -312,37 +312,33 @@ static inline void hse_config_channels(void)
 /**
  * hse_check_fw_version - retrieve firmware version
  *
- * Attribute buffer is encoded into the descriptor to get around HSE memory
- * access limitations and avoid DMA copy in upper range of 32-bit address space.
+ * Issues a service request for retrieving the HSE Firmware version
  */
 static TEE_Result hse_check_fw_version(void)
 {
-	struct hse_srv_desc srv_desc;
 	TEE_Result err;
-	struct hse_attr_fw_version *srv_rsp;
-	paddr_t srv_paddr;
+	struct hse_srv_desc srv_desc;
+	struct hse_buf buf;
 
-	srv_rsp = malloc(sizeof(*srv_rsp));
-	srv_paddr = virt_to_phys(srv_rsp);
-
-	cache_operation(TEE_CACHECLEAN, srv_rsp, sizeof(*srv_rsp));
+	err = hse_buf_alloc(&buf, sizeof(struct hse_attr_fw_version));
 
 	srv_desc.srv_id = HSE_SRV_ID_GET_ATTR;
 	srv_desc.get_attr_req.attr_id = HSE_FW_VERSION_ATTR_ID;
-	srv_desc.get_attr_req.attr_len = sizeof(struct hse_attr_fw_version);
-	srv_desc.get_attr_req.attr = srv_paddr;
+	srv_desc.get_attr_req.attr_len = buf.size;
+	srv_desc.get_attr_req.attr = buf.paddr;
 
 	err = hse_srv_req_sync(HSE_CHANNEL_ADM, &srv_desc);
 	if (err) {
 		DMSG("request failed: %d", err);
+		hse_buf_free(&buf);
 		return err;
 	}
 
-	cache_operation(TEE_CACHEINVALIDATE, srv_rsp, sizeof(*srv_rsp));
+	cache_operation(TEE_CACHEINVALIDATE, buf.data, buf.size);
 
-	memcpy(&drv->firmware_version, srv_rsp, sizeof(*srv_rsp));
+	memcpy(&drv->firmware_version, buf.data, buf.size);
 
-	free(srv_rsp);
+	hse_buf_free(&buf);
 
 	return TEE_SUCCESS;
 }
