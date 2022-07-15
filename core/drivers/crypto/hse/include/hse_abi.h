@@ -116,9 +116,13 @@ enum hse_attr {
 /**
  * enum hse_key_type - key types used by HSE
  * @HSE_KEY_TYPE_AES: AES 128, 192 or 256-bit key
+ * @HSE_KEY_TYPE_HMAC: Symmetric HMAC key
+ * @HSE_KEY_TYPE_SHARED_SECRET: Shared Secret key, used for derivation
  */
 enum hse_key_type {
 	HSE_KEY_TYPE_AES = 0x12u,
+	HSE_KEY_TYPE_HMAC = 0x20u,
+	HSE_KEY_TYPE_SHARED_SECRET = 0x30u,
 };
 
 /**

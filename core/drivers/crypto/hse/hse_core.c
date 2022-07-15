@@ -53,6 +53,8 @@ struct hse_drvdata {
 	bool channel_busy[HSE_NUM_CHANNELS];
 	enum hse_ch_type type[HSE_NUM_CHANNELS];
 	struct hse_key_ring aes_key_ring;
+	struct hse_key_ring sh_secret_key_ring;
+	struct hse_key_ring hmac_key_ring;
 	unsigned int tx_lock;
 	struct hse_attr_fw_version firmware_version;
 };
@@ -232,6 +234,24 @@ static inline void hse_key_ring_free(struct hse_key_ring *key_ring)
 }
 
 /**
+ * get_hse_key_ring - get a pointer to a key ring based on its type
+ * @type: type of keys stored in the key ring
+ */
+static struct hse_key_ring *hse_get_key_ring(enum hse_key_type type)
+{
+	switch (type) {
+	case HSE_KEY_TYPE_AES:
+		return &drv->aes_key_ring;
+	case HSE_KEY_TYPE_HMAC:
+		return &drv->hmac_key_ring;
+	case HSE_KEY_TYPE_SHARED_SECRET:
+		return &drv->sh_secret_key_ring;
+	default:
+		return NULL;
+	}
+}
+
+/**
  * hse_key_slot_acquire - acquire a HSE key slot
  * @type: key type
  *
@@ -244,14 +264,11 @@ struct hse_key *hse_key_slot_acquire(enum hse_key_type type)
 	size_t i;
 	uint32_t exceptions;
 
-	switch (type) {
-	case HSE_KEY_TYPE_AES:
-		key_ring = &drv->aes_key_ring;
-		ring_slots = key_ring->slots;
-		break;
-	default:
+	key_ring = hse_get_key_ring(type);
+	if (!key_ring)
 		return NULL;
-	}
+
+	ring_slots = key_ring->slots;
 
 	/* remove key slot from ring */
 	exceptions = cpu_spin_lock_xsave(&key_ring->lock);
@@ -281,14 +298,11 @@ void hse_key_slot_release(struct hse_key *slot)
 	if (!slot)
 		return;
 
-	switch (slot->type) {
-	case HSE_KEY_TYPE_AES:
-		key_ring = &drv->aes_key_ring;
-		ring_slots = key_ring->slots;
-		break;
-	default:
+	key_ring = hse_get_key_ring(slot->type);
+	if (!key_ring)
 		return;
-	}
+
+	ring_slots = key_ring->slots;
 
 	/* add key slot back to ring */
 	exceptions = cpu_spin_lock_xsave(&key_ring->lock);
@@ -415,34 +429,52 @@ static TEE_Result crypto_driver_init(void)
 	if (err != TEE_SUCCESS)
 		goto out_free_mu;
 
+	err = hse_key_ring_init(&drv->sh_secret_key_ring,
+				HSE_KEY_TYPE_SHARED_SECRET,
+				CFG_HSE_SHARED_SECRET_KEY_ID,
+				CFG_HSE_SHARED_SECRET_GROUP_SIZE);
+	if (err != TEE_SUCCESS)
+		goto out_free_aes;
+
+	err = hse_key_ring_init(&drv->hmac_key_ring,
+				HSE_KEY_TYPE_HMAC,
+				CFG_HSE_HMAC_KEY_GROUP_ID,
+				CFG_HSE_HMAC_KEY_GROUP_SIZE);
+	if (err != TEE_SUCCESS)
+		goto out_free_sh;
+
 	if (!(status & HSE_STATUS_RNG_INIT_OK)) {
 		EMSG("HSE RNG bad state");
 		err = TEE_ERROR_BAD_STATE;
-		goto out_free_aes;
+		goto out_free_hmac;
 	}
 
 	err = hse_rng_initialize();
 	if (err != TEE_SUCCESS) {
 		EMSG("HSE RNG Initialization failed with err 0x%x", err);
-		goto out_free_aes;
+		goto out_free_hmac;
 	}
 
 	if (!(status & HSE_STATUS_INSTALL_OK)) {
 		EMSG("HSE Key Catalog not formatted");
 		err = TEE_ERROR_BAD_STATE;
-		goto out_free_aes;
+		goto out_free_hmac;
 	}
 
 	err = hse_cipher_register();
 	if (err != TEE_SUCCESS) {
 		EMSG("HSE Cipher register failed with err 0x%x", err);
-		goto out_free_aes;
+		goto out_free_hmac;
 	}
 
 	IMSG("HSE is successfully initialized");
 
 	return TEE_SUCCESS;
 
+out_free_hmac:
+	hse_key_ring_free(&drv->hmac_key_ring);
+out_free_sh:
+	hse_key_ring_free(&drv->sh_secret_key_ring);
 out_free_aes:
 	hse_key_ring_free(&drv->aes_key_ring);
 out_free_mu:
