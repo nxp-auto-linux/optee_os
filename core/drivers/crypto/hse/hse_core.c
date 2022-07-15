@@ -22,16 +22,25 @@
 #include <trace.h>
 
 /**
+ * struct hse_key_ring - key slot management struct
+ * @slots: pointer to an array of key slots
+ * @size: number of total key slots
+ * @lock: used for key slot acquisition
+ */
+struct hse_key_ring {
+	struct hse_key *slots;
+	size_t size;
+	unsigned int lock;
+};
+
+/**
  * struct hse_drvdata - HSE driver private data
  * @srv_desc[n].ptr: service descriptor virtual address for channel n
  * @srv_desc[n].dma: service descriptor DMA address for channel n
  * @srv_desc[n].id: current service request ID for channel n
  * @mu: MU instance handle returned by lower abstraction layer
  * @type[n]: designated type of service channel n
- * @aes_key_ring: AES key slots currently available
- * @aes_key_ring_size: size of AES key ring
  * @tx_lock: lock used for service request transmission
- * @key_ring_lock: lock used for key slot acquisition
  * @firmware_version: firmware version
  */
 struct hse_drvdata {
@@ -43,10 +52,8 @@ struct hse_drvdata {
 	void *mu;
 	bool channel_busy[HSE_NUM_CHANNELS];
 	enum hse_ch_type type[HSE_NUM_CHANNELS];
-	struct hse_key *aes_key_ring;
-	size_t aes_key_ring_size;
+	struct hse_key_ring aes_key_ring;
 	unsigned int tx_lock;
-	unsigned int key_ring_lock;
 	struct hse_attr_fw_version firmware_version;
 };
 
@@ -175,45 +182,53 @@ TEE_Result hse_srv_req_sync(uint8_t channel, const void *srv_desc)
 /**
  * hse_key_ring_init - initialize all keys in a specific key group
  * @key_ring: output key ring
+ * @type: type of key slot
  * @group_id: key group ID
  * @group_size: key group size
  *
- * Return: allocated key ring array, NULL for failed key ring allocation
+ * Return: TEE_SUCCESS or error code for failed key ring initialization
  */
-static struct hse_key *hse_key_ring_init(enum hse_key_type type,
-					 uint8_t group_id, uint8_t group_size)
+static TEE_Result hse_key_ring_init(struct hse_key_ring *key_ring,
+				    enum hse_key_type type,
+				    uint8_t group_id, uint8_t group_size)
 {
-	struct hse_key *ring;
+	struct hse_key *slots;
 	unsigned int i;
 
 	if (!group_size)
-		return NULL;
+		return TEE_ERROR_BAD_PARAMETERS;
 
-	ring = malloc(group_size * sizeof(*ring));
-	if (!ring)
-		return NULL;
+	slots = malloc(group_size * sizeof(*slots));
+	if (!slots)
+		return TEE_ERROR_OUT_OF_MEMORY;
 
 	for (i = 0; i < group_size; i++) {
-		ring[i].handle = HSE_KEY_HANDLE(group_id, i);
-		ring[i].type = type;
-		ring[i].acquired = false;
+		slots[i].handle = HSE_KEY_HANDLE(group_id, i);
+		slots[i].type = type;
+		slots[i].acquired = false;
 	}
+
+	key_ring->slots = slots;
+	key_ring->size = group_size;
+	key_ring->lock = SPINLOCK_UNLOCK;
 
 	DMSG("key ring: group id %d, size %d\n", group_id, group_size);
 
-	return ring;
+	return TEE_SUCCESS;
 }
 
 /**
  * hse_key_ring_free - remove all keys in a specific key group
  * @key_ring: input key ring
  */
-static inline void hse_key_ring_free(struct hse_key *key_ring)
+static inline void hse_key_ring_free(struct hse_key_ring *key_ring)
 {
 	if (!key_ring)
 		return;
 
-	free(key_ring);
+	key_ring->size = 0;
+	key_ring->lock = SPINLOCK_UNLOCK;
+	free(key_ring->slots);
 }
 
 /**
@@ -224,29 +239,30 @@ static inline void hse_key_ring_free(struct hse_key *key_ring)
  */
 struct hse_key *hse_key_slot_acquire(enum hse_key_type type)
 {
-	struct hse_key *key_ring, *slot = NULL;
-	size_t key_ring_size, i;
+	struct hse_key_ring *key_ring;
+	struct hse_key *slot = NULL, *ring_slots;
+	size_t i;
 	uint32_t exceptions;
 
 	switch (type) {
 	case HSE_KEY_TYPE_AES:
-		key_ring = drv->aes_key_ring;
-		key_ring_size = drv->aes_key_ring_size;
+		key_ring = &drv->aes_key_ring;
+		ring_slots = key_ring->slots;
 		break;
 	default:
 		return NULL;
 	}
 
 	/* remove key slot from ring */
-	exceptions = cpu_spin_lock_xsave(&drv->key_ring_lock);
-	for (i = 0; i < key_ring_size;  i++) {
-		if (!key_ring[i].acquired) {
-			key_ring[i].acquired = true;
-			slot = &key_ring[i];
+	exceptions = cpu_spin_lock_xsave(&key_ring->lock);
+	for (i = 0; i < key_ring->size;  i++) {
+		if (!ring_slots[i].acquired) {
+			ring_slots[i].acquired = true;
+			slot = &ring_slots[i];
 			break;
 		}
 	}
-	cpu_spin_unlock_xrestore(&drv->key_ring_lock, exceptions);
+	cpu_spin_unlock_xrestore(&key_ring->lock, exceptions);
 
 	return slot;
 }
@@ -257,8 +273,9 @@ struct hse_key *hse_key_slot_acquire(enum hse_key_type type)
  */
 void hse_key_slot_release(struct hse_key *slot)
 {
-	struct hse_key *key_ring;
-	size_t key_ring_size, i;
+	struct hse_key_ring *key_ring;
+	struct hse_key *ring_slots;
+	size_t i;
 	uint32_t exceptions;
 
 	if (!slot)
@@ -266,22 +283,22 @@ void hse_key_slot_release(struct hse_key *slot)
 
 	switch (slot->type) {
 	case HSE_KEY_TYPE_AES:
-		key_ring = drv->aes_key_ring;
-		key_ring_size = drv->aes_key_ring_size;
+		key_ring = &drv->aes_key_ring;
+		ring_slots = key_ring->slots;
 		break;
 	default:
 		return;
 	}
 
 	/* add key slot back to ring */
-	exceptions = cpu_spin_lock_xsave(&drv->key_ring_lock);
-	for (i = 0; i < key_ring_size; i++) {
-		if (slot == &key_ring[i]) {
+	exceptions = cpu_spin_lock_xsave(&key_ring->lock);
+	for (i = 0; i < key_ring->size; i++) {
+		if (slot == &ring_slots[i]) {
 			slot->acquired = false;
 			break;
 		}
 	}
-	cpu_spin_unlock_xrestore(&drv->key_ring_lock, exceptions);
+	cpu_spin_unlock_xrestore(&key_ring->lock, exceptions);
 }
 
 /**
@@ -381,7 +398,6 @@ static TEE_Result crypto_driver_init(void)
 	hse_config_channels();
 
 	drv->tx_lock = SPINLOCK_UNLOCK;
-	drv->key_ring_lock = SPINLOCK_UNLOCK;
 
 	err = hse_check_fw_version();
 	if (err != TEE_SUCCESS)
@@ -393,12 +409,11 @@ static TEE_Result crypto_driver_init(void)
 	     drv->firmware_version.major, drv->firmware_version.minor,
 	     drv->firmware_version.patch);
 
-	drv->aes_key_ring = hse_key_ring_init(HSE_KEY_TYPE_AES,
-					      CFG_HSE_AES_KEY_GROUP_ID,
-					      CFG_HSE_AES_KEY_GROUP_SIZE);
-	if (!drv->aes_key_ring)
+	err = hse_key_ring_init(&drv->aes_key_ring, HSE_KEY_TYPE_AES,
+				CFG_HSE_AES_KEY_GROUP_ID,
+				CFG_HSE_AES_KEY_GROUP_SIZE);
+	if (err != TEE_SUCCESS)
 		goto out_free_mu;
-	drv->aes_key_ring_size = CFG_HSE_AES_KEY_GROUP_SIZE;
 
 	if (!(status & HSE_STATUS_RNG_INIT_OK)) {
 		EMSG("HSE RNG bad state");
@@ -429,7 +444,7 @@ static TEE_Result crypto_driver_init(void)
 	return TEE_SUCCESS;
 
 out_free_aes:
-	hse_key_ring_free(drv->aes_key_ring);
+	hse_key_ring_free(&drv->aes_key_ring);
 out_free_mu:
 	hse_mu_free(drv->mu);
 out_free_drv:
