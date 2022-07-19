@@ -9,6 +9,7 @@
 #include <hse_cipher.h>
 #include <hse_util.h>
 #include <hse_core.h>
+#include <hse_huk.h>
 #include <hse_mu.h>
 #include <initcall.h>
 #include <kernel/interrupt.h>
@@ -469,6 +470,12 @@ static TEE_Result crypto_driver_init(void)
 	err = hse_cipher_register();
 	if (err != TEE_SUCCESS) {
 		EMSG("HSE Cipher register failed with err 0x%x", err);
+		goto out_free_hmac;
+	}
+
+	err = hse_retrieve_huk();
+	if (err != TEE_SUCCESS) {
+		EMSG("HSE HUK could not be retrieved");
 		goto out_free_hmac;
 	}
 
