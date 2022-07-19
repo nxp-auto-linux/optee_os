@@ -17,6 +17,13 @@
 
 #define HSE_INVALID_KEY_HANDLE    0xFFFFFFFFul /* invalid key handle */
 
+#define HSE_ROM_KEY_AES256_KEY1	  0x00000001ul
+
+#define HSE_KDF_ALGO_EXTRACT_STEP 2U
+#define HSE_KDF_ALGO_HKDF_EXPAND  7U
+
+#define HSE_KDF_PRF_HMAC	  2U
+
 /**
  * enum hse_status - HSE status
  * @HSE_STATUS_RNG_INIT_OK: RNG initialization successfully completed
@@ -83,11 +90,20 @@ enum hse_srv_response {
 /**
  * enum hse_srv_id - HSE service ID
  * @HSE_SRV_ID_GET_ATTR: get attribute, such as firmware version
+ * HSE_SRV_ID_GET_RANDOM_NUM: get random number
+ * HSE_SRV_ID_IMPORT_KEY: import a key
+ * HSE_SRV_ID_EXPORT_KEY: export a key
+ * HSE_SRV_ID_KEY_DERIVE: perform a key derivation function
+ * HSE_SRV_ID_KEY_DERIVE_COPY: copy a key from the derived key material
+ * HSE_SRV_ID_SYM_CIPHER: symmetric encryption/decryption
  */
 enum hse_srv_id {
 	HSE_SRV_ID_GET_ATTR = 0x00A50002ul,
 	HSE_SRV_ID_GET_RANDOM_NUM = 0x00000300ul,
 	HSE_SRV_ID_IMPORT_KEY = 0x00000104ul,
+	HSE_SRV_ID_EXPORT_KEY = 0x00000105ul,
+	HSE_SRV_ID_KEY_DERIVE = 0x00000108UL,
+	HSE_SRV_ID_KEY_DERIVE_COPY = 0x00000109UL,
 	HSE_SRV_ID_SYM_CIPHER = 0x00A50203ul,
 };
 
@@ -156,15 +172,25 @@ enum hse_block_mode {
 };
 
 /**
+ * enum hse_hash_algorithm - supported hash algorithm types
+ * @HSE_HASH_ALGO_SHA2_256: SHA2-256 hash
+ */
+enum hse_hash_algorithm {
+	HSE_HASH_ALGO_SHA2_256 = 4u,
+};
+
+/**
  * enum hse_key_flags - key properties
  * @HSE_KF_USAGE_ENCRYPT: key used for encryption (and AEAD tag computation)
  * @HSE_KF_USAGE_DECRYPT: key used for decryption (and AEAD tag verification)
  * @HSE_KF_USAGE_SIGN: key used for message authentication code/tag generation
+ * @HSE_KF_ACCESS_EXPORTABLE: key can be exported out of HSE
  */
 enum hse_key_flags {
 	HSE_KF_USAGE_ENCRYPT = BIT(0),
 	HSE_KF_USAGE_DECRYPT = BIT(1),
 	HSE_KF_USAGE_SIGN = BIT(2),
+	HSE_KF_ACCESS_EXPORTABLE = BIT(11),
 };
 
 /**
@@ -188,6 +214,20 @@ enum hse_sgt_opt {
 	HSE_SGT_OPT_INPUT = BIT(0),
 	HSE_SGT_OPT_OUTPUT = BIT(1),
 };
+
+/**
+ * struct hse_key_info - key properties
+ * @key_flags: the targeted key flags; see &enum hse_key_flags
+ * @key_bit_len: length of the key in bits
+ * @key_type: targeted key type; see &enum hse_key_type
+ */
+struct hse_key_info {
+	uint16_t key_flags;
+	uint16_t key_bit_len;
+	uint8_t reserved0[8];
+	uint8_t key_type;
+	uint8_t reserved1[3];
+} __packed;
 
 /**
  * struct hse_skcipher_srv - symmetric key cipher encryption/decryption
@@ -255,6 +295,162 @@ struct hse_import_key_srv {
 } __packed;
 
 /**
+ * struct hse_sym_cipher_scheme - includes parameters needed for a
+ *                                symmetric cipher
+ * @algo: select an symmetric cipher
+ * @block_mode: the cipher block mode
+ * @iv_len: Initialization Vector length(at least 16 bytes)
+ * @iv: address of  the Initialization Vector/Nonce
+ */
+struct hse_sym_cipher_scheme {
+	uint8_t algo;
+	uint8_t block_mode;
+	uint8_t reserved[2];
+	uint32_t iv_len;
+	uint64_t iv;
+} __packed;
+
+/**
+ * struct hse_export_key_srv - export a key from a key slot
+ * @key_handle: key slot  to export from
+ * @key_info: address where the associated key_info of the exported
+ *            key will be placed
+ * @sym.key: address of symmetric key
+ * @sym.keylen: symmetric key length in bytes
+ * @cipher.cipher_key_handle: encryption key handle; it can only be
+ *                            a provisioning key
+ * @cipher.sym_cipher: symmetric cipher scheme
+ * @auth_key: unused, must be set to HSE_INVALID_KEY_HANDLE
+ */
+struct hse_export_key_srv {
+	uint32_t key_handle;
+	uint64_t key_info;
+	struct {
+		uint8_t reserved0[16];
+		uint64_t key;
+		uint8_t reserved1[16];
+		uint64_t keylen;
+	} __packed sym;
+	struct {
+		uint32_t cipher_key_handle;
+		struct hse_sym_cipher_scheme sym_cipher;
+	} __packed cipher;
+	uint8_t reserved2[32];
+	uint32_t auth_key;
+	uint8_t reserved3[44];
+} __packed;
+
+/**
+ * struct hse_kdf_common_params - KDF Common parameters
+ * @src_key_handle: source key handle to be used for the operation.
+ *                  Should be a pseudorandom key (PRK) or a shared secret
+ * @target_key_handle: target key handle where to store the new key
+ * @key_mat_len: key material length to be derived
+ * @kdf_prf: PRFs used for KDF
+ * @hash: the KDF hash algorithm
+ * @hmac_hash: the hash algorithm used for HMAC
+ * @cmac: dummy byte
+ * @info_len: length of info
+ * @p_info: address where info is stored
+ *
+ * Common parameters for expansion step used for different KDFs.
+ * The expansion inputs are the output from the extractor
+ * (pseudo-random key from hse_kdf_extract_step_scheme) and the public
+ * context information (#pInfo).
+ */
+struct hse_kdf_common_params {
+	uint32_t src_key_handle;
+	uint32_t target_key_handle;
+	uint16_t key_mat_len;
+	uint8_t kdf_prf;
+	union {
+		uint8_t	hash;
+		uint8_t	hmac_hash;
+		uint8_t	cmac;
+	};
+	uint32_t info_len;
+	uint64_t p_info;
+} __packed;
+
+/**
+ * struct hse_hkdf_expand_scheme - HKDF-Expand KDF Function
+ * @kdf_common: KDF common parameters. Only HMAC is supported
+ *
+ * Suitable for deriving keys of a fixed size used for other
+ * cryptographic operations
+ */
+struct hse_hkdf_expand_scheme {
+	struct hse_kdf_common_params kdf_common;
+	uint8_t reserved[8];
+} __packed;
+
+/**
+ * struct hse_kdf_extract_step_scheme - KDF Extraction step
+ * @secret_key_handle: shared secret to be used for the operation
+ * @target_key_handle: target key handle where to store the new key
+ *                     It should point to a #HSE_KEY_TYPE_SHARED_SECRET slot
+ * @kdf_prf: PRFs used for KDF
+ * @hmac_hash: hash algorithm used for HMAC
+ * @cmac: dummy byte
+ * @salt: address where salt is stored. If 0, the default salt will be used
+ *        (an all-zero byte array). Should be set to 0.
+ *
+ * The extraction step is a Pseudo-Random Function (PRF) that takes as
+ * inputs a shared secret and the salt which can be a secret (a key) or
+ * non-secret (a generated random number) and generates a pseudo-random key
+ * From these inputs, the PRF generates a pseudo-random key (PRK).
+ * The PRK can be used for the Expansion phase.
+ */
+struct hse_kdf_extract_step_scheme {
+	uint32_t secret_key_handle;
+	uint32_t target_key_handle;
+	uint8_t kdf_prf;
+	union {
+		uint8_t hmac_hash;
+		uint8_t cmac;
+	};
+	uint8_t reserved[2];
+	uint32_t salt_key_handle;
+	uint8_t reserved1[4];
+	uint64_t salt;
+} __packed;
+
+/**
+ * struct hse_key_derive_srv - key derivation service
+ * @kdf_algo: the key derivation algorithm
+ *
+ * The key derive service (KDF) derives one or more secret keys
+ * from a secret value.
+ */
+struct hse_key_derive_srv {
+	uint8_t	kdf_algo;
+	uint8_t	reserved[3];
+	union {
+		struct hse_kdf_extract_step_scheme extract_step;
+		struct hse_hkdf_expand_scheme hkdf_expand;
+	};
+} __packed;
+
+/**
+ * struct hse_key_derive_copy_key_srv - hse derived key copy service
+ * @key_handle: key handle to be used to extract a key value
+ * @start_offset: start offset from where to copy the key
+ * @target_key_handle: key handle where to store the new key
+ * @key_info: specifies usage flags, restriction access, key bit length etc
+ *
+ * This service can be used to extract keys (or a key) from the derived
+ * key material placed in a temporary shared secret slot
+ * (#HSE_KEY_TYPE_SHARED_SECRET).
+ */
+struct hse_key_derive_copy_key_srv {
+	uint32_t key_handle;
+	uint16_t start_offset;
+	uint8_t reserved[2];
+	uint32_t target_key_handle;
+	struct hse_key_info key_info;
+} __packed;
+
+/**
  * struct hse_attr_fw_version - firmware version
  * @fw_type: attribute ID
  * @major: major revision
@@ -303,21 +499,10 @@ struct hse_srv_desc {
 		struct hse_rng_srv rng_req;
 		struct hse_cipher_srv cipher_req;
 		struct hse_import_key_srv import_key_req;
+		struct hse_export_key_srv export_key_req;
+		struct hse_key_derive_srv key_derive_req;
+		struct hse_key_derive_copy_key_srv key_derive_copy_key_req;
 	};
-} __packed;
-
-/**
- * struct hse_key_info - key properties
- * @key_flags: the targeted key flags; see &enum hse_key_flags
- * @key_bit_len: length of the key in bits
- * @key_type: targeted key type; see &enum hse_key_type
- */
-struct hse_key_info {
-	uint16_t key_flags;
-	uint16_t key_bit_len;
-	uint8_t reserved0[8];
-	uint8_t key_type;
-	uint8_t reserved1[3];
 } __packed;
 
 #endif /* HSE_ABI_H */
