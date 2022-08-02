@@ -264,7 +264,7 @@ TEE_Result hse_mu_msg_send(void *mu, uint8_t channel, uint32_t msg)
 
 	hse_iowrite32(&priv->regs->tr[channel], msg);
 
-	return 0;
+	return TEE_SUCCESS;
 }
 
 /**
@@ -293,7 +293,7 @@ TEE_Result hse_mu_msg_recv(void *mu, uint8_t channel, uint32_t *msg)
 
 	*msg = hse_ioread32(&priv->regs->rr[channel]);
 
-	return 0;
+	return TEE_SUCCESS;
 }
 
 void *hse_mu_desc_base_ptr(void *mu)
@@ -360,22 +360,22 @@ void *hse_mu_init(void)
 
 	mu = malloc(sizeof(*mu));
 	if (!mu) {
-		EMSG("Could not malloc");
+		EMSG("Could not malloc MU Instance");
 		return NULL;
 	}
 
 	err = hse_dt_get_regs(&regs_base, &regs_size, &desc_base, &desc_size);
 	if (err) {
 		EMSG("Failed to parse \"regs\" properties from the DT");
-		return NULL;
+		goto out_err;
 	}
 	mu->regs = hse_mu_space_map(regs_base, regs_size);
 	if (!mu->regs)
-		return NULL;
+		goto out_err;
 
 	mu->desc_base_ptr = hse_mu_space_map(desc_base, desc_size);
 	if (!mu->desc_base_ptr)
-		return NULL;
+		goto out_err;
 
 	mu->desc_base_dma = desc_base;
 
@@ -393,4 +393,8 @@ void *hse_mu_init(void)
 		}
 
 	return mu;
+
+out_err:
+	free(mu);
+	return NULL;
 }

@@ -12,6 +12,7 @@
 #define HSE_MU_H
 
 #include <kernel/interrupt.h>
+#include <stdlib.h>
 #include <types_ext.h>
 #include <tee_api_types.h>
 
@@ -43,6 +44,10 @@ enum hse_irq_type {
 };
 
 void *hse_mu_init(void);
+static inline void hse_mu_free(void *mu)
+{
+	free(mu);
+}
 
 TEE_Result hse_mu_msg_recv(void *mu, uint8_t channel, uint32_t *msg);
 TEE_Result hse_mu_msg_send(void *mu, uint8_t channel, uint32_t msg);
