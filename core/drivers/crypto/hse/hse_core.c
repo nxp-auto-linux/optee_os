@@ -156,14 +156,14 @@ TEE_Result hse_srv_req_sync(uint8_t channel, const void *srv_desc)
 	hse_sync_srv_desc(channel, srv_desc);
 
 	ret = hse_mu_msg_send(mu, channel, drv->srv_desc[channel].dma);
-	if (ret)
+	if (ret != TEE_SUCCESS)
 		return ret;
 
 	while (!hse_mu_msg_pending(mu, channel))
 		;
 
 	ret = hse_mu_msg_recv(mu, channel, &srv_rsp);
-	if (ret)
+	if (ret != TEE_SUCCESS)
 		return ret;
 
 	drv->channel_busy[channel] = false;
@@ -354,25 +354,28 @@ static TEE_Result hse_check_fw_version(void)
 
 static TEE_Result crypto_driver_init(void)
 {
-	TEE_Result ret = TEE_ERROR_GENERIC;
+	TEE_Result err;
 	uint16_t status;
 
 	drv = malloc(sizeof(*drv));
 	if (!drv) {
 		EMSG("Could not malloc drv instance");
-		return TEE_ERROR_OUT_OF_MEMORY;
+		err = TEE_ERROR_OUT_OF_MEMORY;
+		goto out_err;
 	}
 
 	drv->mu = hse_mu_init();
 	if (!drv->mu) {
 		EMSG("Could not get MU Instance");
-		return TEE_ERROR_GENERIC;
+		err = TEE_ERROR_BAD_STATE;
+		goto out_free_drv;
 	}
 
 	status = hse_mu_check_status(drv->mu);
 	if (!(status & HSE_STATUS_INIT_OK)) {
 		EMSG("Firmware not found");
-		return TEE_ERROR_BAD_STATE;
+		err = TEE_ERROR_BAD_STATE;
+		goto out_free_mu;
 	}
 
 	hse_config_channels();
@@ -380,9 +383,10 @@ static TEE_Result crypto_driver_init(void)
 	drv->tx_lock = SPINLOCK_UNLOCK;
 	drv->key_ring_lock = SPINLOCK_UNLOCK;
 
-	ret = hse_check_fw_version();
-	if (ret)
-		return ret;
+	err = hse_check_fw_version();
+	if (err != TEE_SUCCESS)
+		goto out_free_mu;
+
 	DMSG("%s firmware, version %d.%d.%d\n",
 	     drv->firmware_version.fw_type == 0 ? "standard" :
 	     (drv->firmware_version.fw_type == 1 ? "premium" : "custom"),
@@ -392,32 +396,46 @@ static TEE_Result crypto_driver_init(void)
 	drv->aes_key_ring = hse_key_ring_init(HSE_KEY_TYPE_AES,
 					      CFG_HSE_AES_KEY_GROUP_ID,
 					      CFG_HSE_AES_KEY_GROUP_SIZE);
+	if (!drv->aes_key_ring)
+		goto out_free_mu;
 	drv->aes_key_ring_size = CFG_HSE_AES_KEY_GROUP_SIZE;
 
 	if (!(status & HSE_STATUS_RNG_INIT_OK)) {
 		EMSG("HSE RNG bad state");
-		return TEE_ERROR_BAD_STATE;
+		err = TEE_ERROR_BAD_STATE;
+		goto out_free_aes;
 	}
 
-	ret = hse_rng_initialize();
-	if (ret) {
-		EMSG("HSE RNG Initialization failed with err 0x%x", ret);
+	err = hse_rng_initialize();
+	if (err != TEE_SUCCESS) {
+		EMSG("HSE RNG Initialization failed with err 0x%x", err);
+		goto out_free_aes;
 	}
 
 	if (!(status & HSE_STATUS_INSTALL_OK)) {
 		EMSG("HSE Key Catalog not formatted");
-		return TEE_ERROR_BAD_STATE;
+		err = TEE_ERROR_BAD_STATE;
+		goto out_free_aes;
 	}
 
-	ret = hse_cipher_register();
-	if (ret) {
-		EMSG("HSE Cipher register failed with err 0x%x", ret);
-		return ret;
+	err = hse_cipher_register();
+	if (err != TEE_SUCCESS) {
+		EMSG("HSE Cipher register failed with err 0x%x", err);
+		goto out_free_aes;
 	}
 
 	IMSG("HSE is successfully initialized");
 
 	return TEE_SUCCESS;
+
+out_free_aes:
+	hse_key_ring_free(drv->aes_key_ring);
+out_free_mu:
+	hse_mu_free(drv->mu);
+out_free_drv:
+	free(drv);
+out_err:
+	return err;
 }
 
 early_init(crypto_driver_init);
