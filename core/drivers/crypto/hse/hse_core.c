@@ -300,6 +300,7 @@ static inline void hse_config_channels(void)
 	drv->type[0] = HSE_CH_TYPE_ADMIN;
 	drv->srv_desc[0].ptr = hse_mu_desc_base_ptr(drv->mu);
 	drv->srv_desc[0].dma = hse_mu_desc_base_dma(drv->mu);
+	drv->channel_busy[0] = false;
 
 	for (channel = 1; channel < HSE_NUM_CHANNELS; channel++) {
 		if (channel >= HSE_NUM_CHANNELS - HSE_STREAM_COUNT)
@@ -312,6 +313,8 @@ static inline void hse_config_channels(void)
 
 		drv->srv_desc[channel].ptr = (void *)ch_addr;
 		drv->srv_desc[channel].dma = drv->srv_desc[0].dma + offset;
+
+		drv->channel_busy[channel] = false;
 	}
 }
 
