@@ -222,6 +222,7 @@ static TEE_Result hse_cipher_init(struct drvcrypt_cipher_init *dinit)
 	key_inf_buf->key_flags = HSE_KF_USAGE_ENCRYPT | HSE_KF_USAGE_DECRYPT;
 	key_inf_buf->key_bit_len = keybuf.size * 8;
 	key_inf_buf->key_type = alg->key_type;
+	key_inf_buf->smr_flags = 0;
 
 	srv_desc.srv_id = HSE_SRV_ID_IMPORT_KEY;
 	srv_desc.import_key_req.key_handle = ctx->key_slot->handle;

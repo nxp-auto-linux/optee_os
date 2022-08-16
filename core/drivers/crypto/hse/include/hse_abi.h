@@ -219,12 +219,14 @@ enum hse_sgt_opt {
  * struct hse_key_info - key properties
  * @key_flags: the targeted key flags; see &enum hse_key_flags
  * @key_bit_len: length of the key in bits
+ * @smr_flags: secure memory region; not used, must be set to 0
  * @key_type: targeted key type; see &enum hse_key_type
  */
 struct hse_key_info {
 	uint16_t key_flags;
 	uint16_t key_bit_len;
-	uint8_t reserved0[8];
+	uint8_t reserved0[4];
+	uint32_t smr_flags;
 	uint8_t key_type;
 	uint8_t reserved1[3];
 } __packed;
