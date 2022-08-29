@@ -362,6 +362,10 @@ static TEE_Result hse_check_fw_version(void)
 	struct hse_buf buf;
 
 	err = hse_buf_alloc(&buf, sizeof(struct hse_attr_fw_version));
+	if (err != TEE_SUCCESS) {
+		DMSG("failed to allocate buffer: %d\n", err);
+		return err;
+	}
 
 	srv_desc.srv_id = HSE_SRV_ID_GET_ATTR;
 	srv_desc.get_attr_req.attr_id = HSE_FW_VERSION_ATTR_ID;
