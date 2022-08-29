@@ -148,7 +148,7 @@ TEE_Result crypto_rng_read(void *buf, size_t blen)
 
 uint8_t hw_get_random_byte(void)
 {
-	uint8_t buf;
+	uint8_t buf = 0;
 
 	hse_rng_read(&buf, 1);
 
