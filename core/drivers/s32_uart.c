@@ -55,7 +55,7 @@ static vaddr_t chip_to_base(struct serial_chip *chip)
 	return io_pa_or_va(&pd->base);
 }
 
-static void s32_uart_flush(struct serial_chip *chip)
+static void s32_uart_flush(struct serial_chip *chip __unused)
 {
 }
 
