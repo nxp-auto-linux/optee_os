@@ -54,6 +54,9 @@ CFG_WITH_STACK_CANARIES ?= y
 # Establish UART connectivity
 CFG_S32_UART ?= y
 
+# More verbose logs
+CFG_TEE_CORE_LOG_LEVEL ?= 2
+
 CFG_DRAM_END ?= 	0xffffffff
 CFG_SM_SIZE ?= 		0x00200000 # 2MB
 CFG_UBOOT_SIZE ?= 	0x00600000 # 6MB
