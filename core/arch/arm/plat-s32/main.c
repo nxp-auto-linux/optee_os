@@ -36,3 +36,12 @@ void console_init(void)
 		      CONSOLE_UART_CLK_IN_HZ, CONSOLE_UART_BAUDRATE);
 	register_serial_console(&console_data.chip);
 }
+
+unsigned long thread_cpu_resume_handler(unsigned long a0 __unused,
+					unsigned long a1 __unused)
+{
+	s32_uart_init(&console_data, CONSOLE_UART_BASE, CONSOLE_UART_SIZE,
+		      CONSOLE_UART_CLK_IN_HZ, CONSOLE_UART_BAUDRATE);
+
+	return 0;
+}
