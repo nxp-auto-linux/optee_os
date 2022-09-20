@@ -12,9 +12,12 @@
 struct s32_uart_data {
 	struct io_pa_va base;
 	size_t len;
+	uint32_t clock;
+	uint32_t baud;
 	struct serial_chip chip;
 };
 
-void s32_uart_init(struct s32_uart_data *pd, paddr_t pbase, size_t len);
+void s32_uart_init(struct s32_uart_data *pd, paddr_t pbase, size_t len,
+		   uint32_t clock, uint32_t baud);
 
 #endif /* S32_UART_H */

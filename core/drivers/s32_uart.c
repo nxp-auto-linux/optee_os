@@ -46,6 +46,12 @@
 #define UARTSR_DTFTFF		BIT(1)
 #define UARTSR_DRFRFE		BIT(2)
 #define UARTSR_RMB		BIT(9)
+#define UARTCR_ROSE		BIT(23)
+#define UARTCR_OSR_MASK		(0xF << 24)
+#define UARTCR_OSR(uartcr)	(((uartcr) \
+				 & UARTCR_OSR_MASK) >> 24)
+
+#define LDIV_MULTIPLIER		(16)
 
 static int s32_uart_read32(vaddr_t base, uint32_t off, uint32_t *res)
 {
@@ -142,9 +148,79 @@ static const struct serial_ops s32_uart_ops = {
 	.putc = s32_uart_putc,
 };
 
-void s32_uart_init(struct s32_uart_data *pd, paddr_t pbase, size_t len)
+static uint32_t get_ldiv_mult(struct s32_uart_data *pd)
 {
+	uint32_t mult, cr = 0;
+	vaddr_t base = io_pa_or_va(&pd->base, pd->len);
+
+	s32_uart_read32(base, UARTCR, &cr);
+
+	if (cr & UARTCR_ROSE)
+		mult = UARTCR_OSR(cr);
+	else
+		mult = LDIV_MULTIPLIER;
+
+	return mult;
+}
+
+static void s32_uart_set_brg(struct s32_uart_data *pd)
+{
+	uint32_t ibr, fbr;
+	vaddr_t base = io_pa_or_va(&pd->base, pd->len);
+	uint32_t divisr = pd->clock;
+	uint32_t dividr = (uint32_t)(pd->baud * get_ldiv_mult(pd));
+
+	ibr = (uint32_t)(divisr / dividr);
+	fbr = (uint32_t)((divisr % dividr) * 16 / dividr) & 0xF;
+
+	s32_uart_write32(base, LINIBRR, ibr);
+	s32_uart_write32(base, LINFBRR, fbr);
+}
+
+void s32_uart_init(struct s32_uart_data *pd, paddr_t pbase, size_t len,
+		   uint32_t clock, uint32_t baud)
+{
+	vaddr_t base;
+	uint32_t ctrl, linsr;
+
 	pd->base.pa = pbase;
 	pd->len = len;
+	pd->clock = clock;
+	pd->baud = baud;
 	pd->chip.ops = &s32_uart_ops;
+
+	base = io_pa_or_va(&pd->base, pd->len);
+
+	/* Set master mode and init mode */
+	ctrl = LINCR1_MME | LINCR1_INIT;
+	if (s32_uart_write32(base, LINCR1, ctrl))
+		return;
+
+	/* wait for init mode entry */
+	do {
+		if (s32_uart_read32(base, LINSR, &linsr))
+			goto out;
+	} while ((linsr & LINSR_LINS_MASK) != LINSR_LINS_INITMODE);
+
+	/* Set UART bit */
+	if (s32_uart_write32(base, UARTCR, UARTCR_UART))
+		goto out;
+
+	s32_uart_set_brg(pd);
+
+	/* Set preset timeout register value. */
+	if (s32_uart_write32(base, UARTPTO, 0xf))
+		goto out;
+
+	/* 8-bit data, no parity, Tx/Rx enabled, UART mode */
+	ctrl = UARTCR_PC1 | UARTCR_RXEN | UARTCR_TXEN | UARTCR_PC0 |
+		UARTCR_WL0 | UARTCR_UART | UARTCR_RFBM | UARTCR_TFBM;
+	if (s32_uart_write32(base, UARTCR, ctrl))
+		goto out;
+
+out:
+	s32_uart_read32(base, LINCR1, &ctrl);
+	ctrl &= ~LINCR1_INIT;
+	/* end init mode */
+	s32_uart_write32(base, LINCR1, ctrl);
 }

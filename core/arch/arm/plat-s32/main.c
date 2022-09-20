@@ -32,6 +32,7 @@ void main_init_gic(void)
 
 void console_init(void)
 {
-	s32_uart_init(&console_data, CONSOLE_UART_BASE, CONSOLE_UART_SIZE);
+	s32_uart_init(&console_data, CONSOLE_UART_BASE, CONSOLE_UART_SIZE,
+		      CONSOLE_UART_CLK_IN_HZ, CONSOLE_UART_BAUDRATE);
 	register_serial_console(&console_data.chip);
 }
