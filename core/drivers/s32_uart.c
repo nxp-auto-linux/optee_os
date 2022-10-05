@@ -47,6 +47,45 @@
 #define UARTSR_DRFRFE		BIT(2)
 #define UARTSR_RMB		BIT(9)
 
+static int s32_uart_read32(vaddr_t base, uint32_t off, uint32_t *res)
+{
+	vaddr_t addr;
+
+	if (ADD_OVERFLOW(base, off, &addr))
+		return -1;
+
+	*res = io_read32(addr);
+	return 0;
+}
+
+static int s32_uart_write32(vaddr_t base, uint32_t off, uint32_t val)
+{
+	vaddr_t addr;
+
+	if (ADD_OVERFLOW(base, off, &addr))
+		return -1;
+
+	io_write32(addr, val);
+	return 0;
+}
+
+static int s32_uart_write8(vaddr_t base, uint32_t off, int ch)
+{
+	vaddr_t addr;
+	uint8_t ch8;
+
+	if (ADD_OVERFLOW(base, off, &addr))
+		return -1;
+
+	if (ch < 0 || ch > UCHAR_MAX)
+		return -1;
+
+	ch8 = (uint8_t)ch;
+	io_write8(addr, ch8);
+
+	return 0;
+}
+
 static void s32_uart_flush(struct serial_chip *chip __unused)
 {
 }
@@ -55,7 +94,8 @@ static void s32_uart_putc(struct serial_chip *chip, int ch)
 {
 	struct s32_uart_data *pd;
 	vaddr_t base;
-	uint32_t uartsr;
+	uint32_t uartsr, uartcr;
+	int ret;
 
 	if (!chip)
 		return;
@@ -63,22 +103,37 @@ static void s32_uart_putc(struct serial_chip *chip, int ch)
 	pd = container_of(chip, struct s32_uart_data, chip);
 	base = io_pa_or_va(&pd->base, pd->len);
 
+	ret = s32_uart_read32(base, UARTCR, &uartcr);
+	if (ret < 0)
+		return;
+
 	/* UART is in FIFO mode */
-	if ((io_read32(base + UARTCR) & UARTCR_TFBM)) {
-		while (io_read32(base + UARTSR) & UARTSR_DTFTFF)
-			;
-		io_write8(base + BDRL, ch);
+	if ((uartcr & UARTCR_TFBM)) {
+		do {
+			ret = s32_uart_read32(base, UARTSR, &uartsr);
+			if (ret < 0)
+				return;
+		} while (uartsr & UARTSR_DTFTFF);
+
+		s32_uart_write8(base, BDRL, ch);
 
 	/* UART is in Buffer mode */
 	} else {
-		io_write8(base + BDRL, ch);
-		while (!(uartsr = io_read32(base + UARTSR) & UARTSR_DTFTFF))
-			;
+		ret = s32_uart_write8(base, BDRL, ch);
+		if (ret < 0)
+			return;
+
+		do {
+			ret = s32_uart_read32(base, UARTSR, &uartsr);
+			if (ret < 0)
+				return;
+		} while (!(uartsr & UARTSR_DTFTFF));
+
 		/* In Buffer Mode the DTFTFF bit of UARTSR register
 		 * has to be cleared in software
 		 */
 		uartsr &= ~(UARTSR_DTFTFF);
-		io_write32(base + UARTSR, uartsr);
+		s32_uart_write32(base, UARTSR, uartsr);
 	}
 }
 
