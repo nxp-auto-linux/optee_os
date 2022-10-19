@@ -19,6 +19,18 @@
 #include <trace.h>
 
 /**
+ * struct hse_key_ring - key slot management struct
+ * @slots: pointer to an array of key slots
+ * @size: number of total key slots
+ * @lock: used for key slot acquisition
+ */
+struct hse_key_ring {
+	struct hse_key *slots;
+	size_t size;
+	unsigned int lock;
+};
+
+/**
  * struct hse_drvdata - HSE driver private data
  * @srv_desc[n].ptr: service descriptor virtual address for channel n
  * @srv_desc[n].dma: service descriptor DMA address for channel n
@@ -26,6 +38,7 @@
  * @mu: MU instance handle returned by lower abstraction layer
  * @type[n]: designated type of service channel n
  * @tx_lock: lock used for service request transmission
+ * @aes_key_ring: AES key ring, used for managing key slots
  * @firmware_version: firmware version
  */
 struct hse_drvdata {
@@ -37,6 +50,7 @@ struct hse_drvdata {
 	void *mu;
 	bool channel_busy[HSE_NUM_CHANNELS];
 	enum hse_ch_type type[HSE_NUM_CHANNELS];
+	struct hse_key_ring aes_key_ring;
 	unsigned int tx_lock;
 	struct hse_attr_fw_version firmware_version;
 };
@@ -178,6 +192,136 @@ out:
 }
 
 /**
+ * hse_key_ring_init - initialize all keys in a specific key group
+ * @key_ring: output key ring
+ * @type: type of key slot
+ * @group_id: key group ID
+ * @group_size: key group size
+ *
+ * Return: TEE_SUCCESS or error code for failed key ring initialization
+ */
+static TEE_Result hse_key_ring_init(struct hse_key_ring *key_ring,
+				    enum hse_key_type type,
+				    uint8_t group_id, uint8_t group_size)
+{
+	struct hse_key *slots;
+	unsigned int i;
+
+	if (!group_size)
+		return TEE_ERROR_BAD_PARAMETERS;
+
+	slots = malloc(group_size * sizeof(*slots));
+	if (!slots)
+		return TEE_ERROR_OUT_OF_MEMORY;
+
+	for (i = 0; i < group_size; i++) {
+		slots[i].handle = HSE_KEY_HANDLE(group_id, i);
+		slots[i].type = type;
+		slots[i].acquired = false;
+	}
+
+	key_ring->slots = slots;
+	key_ring->size = group_size;
+	key_ring->lock = SPINLOCK_UNLOCK;
+
+	DMSG("key ring: group id %d, size %d\n", group_id, group_size);
+
+	return TEE_SUCCESS;
+}
+
+/**
+ * hse_key_ring_free - remove all keys in a specific key group
+ * @key_ring: input key ring
+ */
+static inline void hse_key_ring_free(struct hse_key_ring *key_ring)
+{
+	if (!key_ring)
+		return;
+
+	key_ring->size = 0;
+	key_ring->lock = SPINLOCK_UNLOCK;
+	free(key_ring->slots);
+}
+
+/**
+ * hse_get_key_ring - get a pointer to a key ring based on its type
+ * @type: type of keys stored in the key ring
+ */
+static struct hse_key_ring *hse_get_key_ring(enum hse_key_type type)
+{
+	switch (type) {
+	case HSE_KEY_TYPE_AES:
+		return &drv->aes_key_ring;
+	default:
+		return NULL;
+	}
+}
+
+/**
+ * hse_key_slot_acquire - acquire a HSE key slot
+ * @type: key type
+ *
+ * Return: key slot of specified type if available, NULL otherwise
+ */
+struct hse_key *hse_key_slot_acquire(enum hse_key_type type)
+{
+	struct hse_key_ring *key_ring;
+	struct hse_key *slot = NULL, *ring_slots;
+	size_t i;
+	uint32_t exceptions;
+
+	key_ring = hse_get_key_ring(type);
+	if (!key_ring)
+		return NULL;
+
+	ring_slots = key_ring->slots;
+
+	/* remove key slot from ring */
+	exceptions = cpu_spin_lock_xsave(&key_ring->lock);
+	for (i = 0; i < key_ring->size;  i++) {
+		if (!ring_slots[i].acquired) {
+			ring_slots[i].acquired = true;
+			slot = &ring_slots[i];
+			break;
+		}
+	}
+	cpu_spin_unlock_xrestore(&key_ring->lock, exceptions);
+
+	return slot;
+}
+
+/**
+ * hse_key_slot_release - release a HSE key slot
+ * @slot: key slot
+ */
+void hse_key_slot_release(struct hse_key *slot)
+{
+	struct hse_key_ring *key_ring;
+	struct hse_key *ring_slots;
+	size_t i;
+	uint32_t exceptions;
+
+	if (!slot)
+		return;
+
+	key_ring = hse_get_key_ring(slot->type);
+	if (!key_ring)
+		return;
+
+	ring_slots = key_ring->slots;
+
+	/* add key slot back to ring */
+	exceptions = cpu_spin_lock_xsave(&key_ring->lock);
+	for (i = 0; i < key_ring->size; i++) {
+		if (slot == &ring_slots[i]) {
+			slot->acquired = false;
+			break;
+		}
+	}
+	cpu_spin_unlock_xrestore(&key_ring->lock, exceptions);
+}
+
+/**
  * hse_config_channels - configure channels and manage descriptor space
  *
  * HSE firmware restricts channel zero to administrative services, all the rest
@@ -288,6 +432,12 @@ static TEE_Result crypto_driver_init(void)
 	     (drv->firmware_version.fw_type == 1 ? "premium" : "custom"),
 	     drv->firmware_version.major, drv->firmware_version.minor,
 	     drv->firmware_version.patch);
+
+	err = hse_key_ring_init(&drv->aes_key_ring, HSE_KEY_TYPE_AES,
+				CFG_HSE_AES_KEY_GROUP_ID,
+				CFG_HSE_AES_KEY_GROUP_SIZE);
+	if (err != TEE_SUCCESS)
+		goto out_free_mu;
 
 	IMSG("HSE is successfully initialized");
 
