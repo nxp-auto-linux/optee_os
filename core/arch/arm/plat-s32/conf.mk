@@ -38,10 +38,6 @@ $(call force,CFG_SECURE_TIME_SOURCE_CNTPCT,y)
 # Inject OP-TEE nodes in the non-secure U-boot DTB
 $(call force,CFG_DT,y)
 
-# OP-TEE's own DTB
-$(call force,CFG_EMBED_DTB,y)
-CFG_EMBED_DTB_SOURCE_FILE = s32.dts
-
 supported-ta-targets = ta_arm64
 
 # Security-related configurations
