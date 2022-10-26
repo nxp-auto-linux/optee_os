@@ -9,10 +9,25 @@
 #include <libfdt.h>
 #include <trace.h>
 
-#define HSE_REGS_NAME		"hse-" CFG_HSE_MU_INST "-regs"
-#define HSE_DESC_NAME		"hse-" CFG_HSE_MU_INST "-desc"
-
 static const char *hse_compatible = "nxp,s32cc-hse";
+
+static int fdt_find_compatible_enabled(void *fdt, const char *compatible)
+{
+	int offs = -1;
+
+	while (true) {
+		offs = fdt_node_offset_by_compatible(fdt, offs, compatible);
+
+		if (offs < 0)
+			break;
+
+		if (_fdt_get_status(fdt, offs) == (DT_STATUS_OK_NSEC |
+						   DT_STATUS_OK_SEC))
+			break;
+	}
+
+	return offs;
+}
 
 static uint64_t fdt_read_reg_cells(const fdt32_t *prop, int nr_cells)
 {
@@ -86,24 +101,22 @@ int hse_dt_get_regs(paddr_t *regs_base, size_t *regs_size,
 		return -1;
 	}
 
-	offset = fdt_node_offset_by_compatible(fdt, -1, hse_compatible);
-	while (offset >= 0) {
-		regs_off = fdt_stringlist_search(fdt, offset, "reg-names",
-						 HSE_REGS_NAME);
-		desc_off = fdt_stringlist_search(fdt, offset, "reg-names",
-						 HSE_DESC_NAME);
-
-		if (regs_off >= 0 && desc_off >= 0)
-			break;
-
-		offset = fdt_node_offset_by_compatible(fdt, offset,
-						       hse_compatible);
-	}
-
+	offset = fdt_find_compatible_enabled(fdt, hse_compatible);
 	if (offset < 0) {
-		EMSG("Could not find desired node");
+		EMSG("Could not find node with matching compatible \"%s\"",
+		     hse_compatible);
 		return offset;
 	}
+
+	regs_off = fdt_stringlist_search(fdt, offset, "reg-names",
+					 "hse-regs");
+	if (regs_off < 0)
+		return regs_off;
+
+	desc_off = fdt_stringlist_search(fdt, offset, "reg-names",
+					 "hse-desc");
+	if (desc_off < 0)
+		return desc_off;
 
 	ret = fdt_get_reg_props_by_index(fdt, offset, regs_off, &base, &size);
 	if (ret < 0)
