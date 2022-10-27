@@ -13,6 +13,7 @@
 #include <hse_interface.h>
 #include <hse_mu.h>
 #include <io.h>
+#include <kernel/spinlock.h>
 #include <malloc.h>
 #include <mm/core_memprot.h>
 #include <trace.h>
@@ -63,12 +64,16 @@ struct hse_mu_regs {
  * @regs: MU instance register space base virtual address
  * @desc_base_ptr: descriptor space base virtual address
  * @desc_base_dma: descriptor space base DMA address
+ * @irq_lock: protects the enable/disable of channel irq
  */
 struct hse_mu_data {
 	struct hse_mu_regs *regs;
 	void *desc_base_ptr;
 	paddr_t desc_base_dma;
+	unsigned int irq_lock;
 };
+
+static struct itr_handler hse_rx_handler;
 
 /**
  * hse_ioread32 - read from a 32-bit MU register
@@ -131,13 +136,17 @@ TEE_Result hse_mu_check_event(void *mu, uint32_t *val)
 }
 
 /**
- * hse_mu_irq_disable - disable a specific type of interrupt using a mask
+ * get_irq_regaddr - get the register address along with its mask
  * @mu: MU instance handle
  * @irq_type: interrupt type
- * @irq_mask: interrupt mask
+ * @irq_mask: return location for the corresponding interrupt mask
+ *
+ * Return: HSE register address corresponding to the interrupt type.
+ *         Also, *irq_mask will store the interrupt mask.
+ *         On error, return NULL.
  */
-static void hse_mu_irq_disable(void *mu, enum hse_irq_type irq_type,
-			       uint32_t irq_mask)
+static void *get_irq_regaddr(void *mu, enum hse_irq_type irq_type,
+			     uint32_t *irq_mask)
 {
 	struct hse_mu_data *priv = mu;
 	void *regaddr;
@@ -145,21 +154,103 @@ static void hse_mu_irq_disable(void *mu, enum hse_irq_type irq_type,
 	switch (irq_type) {
 	case HSE_INT_ACK_REQUEST:
 		regaddr = &priv->regs->tcr;
-		irq_mask &= HSE_CH_MASK_ALL;
+		*irq_mask &= HSE_CH_MASK_ALL;
 		break;
 	case HSE_INT_RESPONSE:
 		regaddr = &priv->regs->rcr;
-		irq_mask &= HSE_CH_MASK_ALL;
+		*irq_mask &= HSE_CH_MASK_ALL;
 		break;
 	case HSE_INT_SYS_EVENT:
 		regaddr = &priv->regs->gier;
-		irq_mask &= HSE_EVT_MASK_ALL;
+		*irq_mask &= HSE_EVT_MASK_ALL;
 		break;
 	default:
-		return;
+		return NULL;
 	}
 
+	return regaddr;
+}
+
+/**
+ * hse_mu_irq_enable - enable a specific type of interrupt using a mask
+ * @mu: MU instance handle
+ * @irq_type: interrupt type
+ * @irq_mask: interrupt mask
+ */
+void hse_mu_irq_enable(void *mu, enum hse_irq_type irq_type,
+		       uint32_t irq_mask)
+{
+	struct hse_mu_data *priv = mu;
+	void *regaddr;
+	uint32_t exceptions;
+
+	regaddr = get_irq_regaddr(priv, irq_type, &irq_mask);
+	if (!regaddr)
+		return;
+
+	exceptions = cpu_spin_lock_xsave(&priv->irq_lock);
+
+	hse_iowrite32(regaddr, hse_ioread32(regaddr) | irq_mask);
+
+	cpu_spin_unlock_xrestore(&priv->irq_lock, exceptions);
+}
+
+/**
+ * hse_mu_irq_disable - disable a specific type of interrupt using a mask
+ * @mu: MU instance handle
+ * @irq_type: interrupt type
+ * @irq_mask: interrupt mask
+ */
+void hse_mu_irq_disable(void *mu, enum hse_irq_type irq_type,
+			uint32_t irq_mask)
+{
+	struct hse_mu_data *priv = mu;
+	void *regaddr;
+	uint32_t exceptions;
+
+	regaddr = get_irq_regaddr(priv, irq_type, &irq_mask);
+	if (!regaddr)
+		return;
+
+	exceptions = cpu_spin_lock_xsave(&priv->irq_lock);
+
 	hse_iowrite32(regaddr, hse_ioread32(regaddr) & ~irq_mask);
+
+	cpu_spin_unlock_xrestore(&priv->irq_lock, exceptions);
+}
+
+/**
+ * hse_mu_is_irq_enabled - checks if the interrupt type is enabled
+ *                         for the given channel
+ * @mu: MU instance handle
+ * @irq_type: interrupt type
+ * @channel: channel ID
+ *
+ * Return: true if the irq is enabled, false otherwise
+ */
+
+bool hse_mu_is_irq_enabled(void *mu, enum hse_irq_type irq_type,
+			   uint8_t channel)
+{
+	struct hse_mu_data *priv = mu;
+	void *regaddr;
+	uint32_t exceptions, val, irq_mask;
+
+	if (channel >= HSE_NUM_OF_CHANNELS_PER_MU)
+		return false;
+
+	irq_mask = BIT(channel);
+	regaddr = get_irq_regaddr(priv, irq_type, &irq_mask);
+	if (!regaddr)
+		return false;
+
+	exceptions = cpu_spin_lock_xsave(&priv->irq_lock);
+
+	val = hse_ioread32(regaddr) & irq_mask;
+
+	cpu_spin_unlock_xrestore(&priv->irq_lock, exceptions);
+
+	return val;
 }
 
 /**
@@ -191,29 +282,19 @@ static bool hse_mu_channel_available(void *mu, uint8_t channel)
 }
 
 /**
- * hse_mu_next_pending_channel - find the next channel with pending message
+ * hse_mu_pending_channels - return all pending channels
  * @mu: MU instance handle
  *
- * Return: channel index, HSE_CHANNEL_INV if no message pending
+ * Return: masked rsr value, 0 if no message pending
  */
-uint8_t hse_mu_next_pending_channel(void *mu)
+uint32_t hse_mu_pending_channels(void *mu)
 {
 	struct hse_mu_data *priv = mu;
-	void *rsr_ptr;
-	uint32_t rsrval;
-	int v;
 
 	if (!mu)
-		return HSE_CHANNEL_INV;
+		return 0;
 
-	rsrval = hse_ioread32(&priv->regs->rsr) & HSE_CH_MASK_ALL;
-	rsr_ptr = &rsrval;
-
-	bit_ffs(rsr_ptr, 32, &v);
-	if (v < 0)
-		return HSE_CHANNEL_INV;
-
-	return v;
+	return hse_ioread32(&priv->regs->rsr) & HSE_CH_MASK_ALL;
 }
 
 /**
@@ -349,13 +430,14 @@ static void *hse_mu_space_map(paddr_t base, size_t len)
  *
  * Return: MU instance handle on success, NULL otherwise
  */
-void *hse_mu_init(void)
+void *hse_mu_init(void *data, enum itr_return (*rx_itr)(struct itr_handler *h))
 {
 	TEE_Result res;
 	struct hse_mu_data *mu = NULL;
 	uint8_t channel;
 	uint32_t msg;
 	int err;
+	int rx_irq_num;
 	paddr_t regs_base, desc_base;
 	size_t regs_size, desc_size;
 
@@ -379,6 +461,21 @@ void *hse_mu_init(void)
 		goto out_err;
 
 	mu->desc_base_dma = desc_base;
+
+	err = hse_dt_get_irq(&rx_irq_num);
+	if (err) {
+		EMSG("Failed to parse \"interrupts\" properties from the DT");
+		goto out_err;
+	}
+
+	/* Register the interrupt handler for the RX interrupt */
+	hse_rx_handler.it = rx_irq_num;
+	hse_rx_handler.handler = rx_itr;
+	hse_rx_handler.data = data;
+	itr_add(&hse_rx_handler);
+	itr_enable(hse_rx_handler.it);
+
+	mu->irq_lock = SPINLOCK_UNLOCK;
 
 	hse_mu_irq_disable(mu, HSE_INT_ACK_REQUEST, HSE_CH_MASK_ALL);
 	hse_mu_irq_disable(mu, HSE_INT_RESPONSE, HSE_CH_MASK_ALL);

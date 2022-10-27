@@ -40,7 +40,7 @@ enum hse_irq_type {
 	HSE_INT_SYS_EVENT = 2u,
 };
 
-void *hse_mu_init(void);
+void *hse_mu_init(void *data, enum itr_return (*rx_itr)(struct itr_handler *h));
 static inline void hse_mu_free(void *mu)
 {
 	free(mu);
@@ -52,10 +52,17 @@ TEE_Result hse_mu_msg_send(void *mu, uint8_t channel, uint32_t msg);
 uint16_t hse_mu_check_status(void *mu);
 TEE_Result hse_mu_check_event(void *mu, uint32_t *val);
 
-uint8_t hse_mu_next_pending_channel(void *mu);
+uint32_t hse_mu_pending_channels(void *mu);
 bool hse_mu_msg_pending(void *mu, uint8_t channel);
 
 void *hse_mu_desc_base_ptr(void *mu);
 paddr_t hse_mu_desc_base_dma(void *mu);
+
+void hse_mu_irq_enable(void *mu, enum hse_irq_type irq_type,
+		       uint32_t irq_mask);
+void hse_mu_irq_disable(void *mu, enum hse_irq_type irq_type,
+			uint32_t irq_mask);
+bool hse_mu_is_irq_enabled(void *mu, enum hse_irq_type irq_type,
+			   uint8_t channel);
 
 #endif /* HSE_MU_H */

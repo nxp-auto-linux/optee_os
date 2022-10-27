@@ -39,6 +39,7 @@ struct hse_key_ring {
  * @type[n]: designated type of service channel n
  * @tx_lock: lock used for service request transmission
  * @aes_key_ring: AES key ring, used for managing key slots
+ * @rx_cbk: callback functions; used when performing async requests
  * @firmware_version: firmware version
  */
 struct hse_drvdata {
@@ -54,6 +55,10 @@ struct hse_drvdata {
 	struct hse_key_ring sh_secret_key_ring;
 	struct hse_key_ring hmac_key_ring;
 	unsigned int tx_lock;
+	struct {
+		void (*fn)(TEE_Result err, void *ctx);
+		void *ctx;
+	} rx_cbk[HSE_NUM_OF_CHANNELS_PER_MU];
 	hseAttrFwVersion_t firmware_version;
 };
 
@@ -170,7 +175,7 @@ TEE_Result hse_srv_req_sync(uint8_t channel, const void *srv_desc)
 
 	hse_sync_srv_desc(channel, srv_desc);
 
-	/* HSE MU interface can only send 32 bit messages */
+	/* Descriptor must reside in the 32-bit address range */
 	if (drv->srv_desc[channel].dma > UINT32_MAX) {
 		ret = TEE_ERROR_BAD_FORMAT;
 		goto out;
@@ -192,6 +197,142 @@ TEE_Result hse_srv_req_sync(uint8_t channel, const void *srv_desc)
 out:
 	drv->channel_busy[channel] = false;
 	return ret;	
+}
+
+/**
+ * hse_srv_req_async - initiate service request and return
+ * @channel: selects channel for the service request
+ * @srv_desc: address of service descriptor
+ * @ctx: data that will be used in the callback function; can be NULL
+ * @rx_cbk: callback function
+ *
+ * The service request is initiated and the response is received
+ * asynchronously. Upon initiating the request, a callback function
+ * is registered which is executed upon the arrival of the response.
+ *
+ * Return: TEE_SUCCESS on succes, specific err code on error
+ */
+TEE_Result hse_srv_req_async(uint8_t channel, const void *srv_desc,
+			     void *ctx,
+			     void (*rx_cbk)(TEE_Result err, void *ctx))
+{
+	TEE_Result ret;
+	uint32_t exceptions;
+	void *mu = drv->mu;
+
+	if (channel != HSE_CHANNEL_ANY &&
+	    channel >= HSE_NUM_OF_CHANNELS_PER_MU)
+		return TEE_ERROR_BAD_PARAMETERS;
+
+	if (!srv_desc || !rx_cbk)
+		return TEE_ERROR_BAD_PARAMETERS;
+
+	exceptions = cpu_spin_lock_xsave(&drv->tx_lock);
+
+	if (channel == HSE_CHANNEL_ANY) {
+		channel = hse_next_free_channel();
+		if (channel == HSE_CHANNEL_INV) {
+			cpu_spin_unlock_xrestore(&drv->tx_lock, exceptions);
+			DMSG("No channel available\n");
+			return TEE_ERROR_BUSY;
+		}
+	} else if (drv->channel_busy[channel]) {
+		cpu_spin_unlock_xrestore(&drv->tx_lock, exceptions);
+		DMSG("channel %d busy\n", channel);
+		return TEE_ERROR_BUSY;
+	}
+
+	drv->channel_busy[channel] = true;
+
+	cpu_spin_unlock_xrestore(&drv->tx_lock, exceptions);
+
+	hse_mu_irq_enable(mu, HSE_INT_RESPONSE, BIT(channel));
+	drv->rx_cbk[channel].ctx = ctx;
+	drv->rx_cbk[channel].fn = rx_cbk;
+
+	hse_sync_srv_desc(channel, srv_desc);
+
+	/* Descriptor must reside in the 32-bit address range */
+	if (drv->srv_desc[channel].dma > UINT32_MAX) {
+		ret = TEE_ERROR_BAD_FORMAT;
+		goto out;
+	}
+
+	ret = hse_mu_msg_send(mu, channel, drv->srv_desc[channel].dma);
+	if (ret != TEE_SUCCESS)
+		goto out;
+
+	return TEE_SUCCESS;
+out:
+	drv->channel_busy[channel] = false;
+	return ret;
+}
+
+/**
+ * hse_srv_rsp_dispatch - handle service response on selected channel
+ * @dev: HSE device
+ * @channel: service channel index
+ *
+ * For a pending service response, execute the callback function registered
+ * by the asynchronous service request
+ */
+static void hse_srv_rsp_dispatch(uint8_t channel)
+{
+	TEE_Result err;
+	uint32_t srv_rsp;
+	void *ctx;
+	void (*rx_cbk)(TEE_Result err, void *ctx);
+
+	err = hse_mu_msg_recv(drv->mu, channel, &srv_rsp);
+	if (err) {
+		EMSG("Failed to read response on channel %d\n", channel);
+		return;
+	}
+
+	err = hse_err_decode(srv_rsp);
+	if (err)
+		DMSG("Request id 0x%x failed with error code %x, channel %d\n",
+		     drv->srv_desc[channel].id, srv_rsp, channel);
+
+	rx_cbk = drv->rx_cbk[channel].fn;
+	ctx = drv->rx_cbk[channel].ctx;
+
+	drv->rx_cbk[channel].fn = NULL;
+	drv->rx_cbk[channel].ctx = NULL;
+
+	drv->channel_busy[channel] = false;
+
+	rx_cbk(err, ctx); /* upper layer RX callback */
+}
+
+/**
+ * hse_rx_dispatcher - deferred handler for HSE_INT_RESPONSE type interrupts
+ * @irq: interrupt line
+ * @dev: HSE device
+ *
+ * Filters channels which have a pending message and interrupts enabled
+ * and calls the dispatcher
+ *
+ * Return: ITRR_HANDLED
+ */
+static enum itr_return hse_rx_dispatcher(struct itr_handler *h __unused)
+{
+	uint8_t channel;
+	bool pending_msg, irq_enabled;
+
+	for (channel = 0; channel < HSE_NUM_OF_CHANNELS_PER_MU; channel++) {
+		pending_msg = hse_mu_msg_pending(drv->mu, channel);
+		irq_enabled = hse_mu_is_irq_enabled(drv->mu, HSE_INT_RESPONSE,
+						    channel);
+
+		if (pending_msg && irq_enabled) {
+			hse_mu_irq_disable(drv->mu, HSE_INT_RESPONSE,
+					   BIT(channel));
+			hse_srv_rsp_dispatch(channel);
+		}
+	}
+
+	return ITRR_HANDLED;
 }
 
 /**
@@ -407,14 +548,14 @@ static TEE_Result crypto_driver_init(void)
 	TEE_Result err;
 	uint16_t status;
 
-	drv = malloc(sizeof(*drv));
+	drv = calloc(1, sizeof(*drv));
 	if (!drv) {
 		EMSG("Could not malloc drv instance");
 		err = TEE_ERROR_OUT_OF_MEMORY;
 		goto out_err;
 	}
 
-	drv->mu = hse_mu_init();
+	drv->mu = hse_mu_init(drv, hse_rx_dispatcher);
 	if (!drv->mu) {
 		EMSG("Could not get MU Instance");
 		err = TEE_ERROR_BAD_STATE;

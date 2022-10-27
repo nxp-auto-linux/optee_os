@@ -53,6 +53,9 @@ TEE_Result hse_buf_alloc(struct hse_buf *buf, size_t size);
 void hse_buf_free(struct hse_buf *buf);
 
 TEE_Result hse_srv_req_sync(uint8_t channel, const void *srv_desc);
+TEE_Result hse_srv_req_async(uint8_t channel, const void *srv_desc,
+			     void *ctx,
+			     void (*rx_cbk)(TEE_Result err, void *ctx));
 
 struct hse_key *hse_key_slot_acquire(hseKeyType_t type);
 void hse_key_slot_release(struct hse_key *slot);
