@@ -73,6 +73,22 @@ CFG_CRYPTO_DRIVER ?= n
 CFG_CRYPTO_DRIVER_DEBUG ?= 0
 
 ifeq ($(CFG_CRYPTO_DRIVER), y)
+
+# Use HSE_FWDIR to specify the path to HSE FW Package
+# If not set, HSE_FWDIR takes a default value based on PLATFORM_FLAVOR
+ifeq ($(HSE_FWDIR),)
+
+ifeq ($(PLATFORM_FLAVOR), s32g3)
+HSE_FWDIR ?= $(HOME)/HSE_FW_S32G3_0_0_21_0
+else ifeq ($(PLATFORM_FLAVOR), s32g2)
+HSE_FWDIR ?= $(HOME)/HSE_FW_S32G2_0_1_0_5
+else ifeq ($(PLATFORM_FLAVOR), s32r)
+HSE_FWDIR ?= $(HOME)/HSE_FW_S32R45_0_1_0_1
+else
+$(error Default path to HSE Firmware Package not defined for PLATFORM_FLAVOR=$(PLATFORM_FLAVOR))
+endif
+endif
+
 $(call force,CFG_NXP_HSE,y)
 # There are 4 channels numbered 0 to 3.
 # By default, the third channel is used in OP-TEE.
