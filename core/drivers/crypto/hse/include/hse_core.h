@@ -6,6 +6,7 @@
 #ifndef HSE_CORE_H
 #define HSE_CORE_H
 
+#include <hse_keymgmt_common_types.h>
 #include <tee_api_types.h>
 
 #define HSE_CHANNEL_ANY    0xACu /* use any channel, no request ordering */
@@ -30,14 +31,14 @@ enum hse_ch_type {
  * @type: key type
  */
 struct hse_key {
-	uint32_t handle;
-	enum hse_key_type type;
+	hseKeyHandle_t handle;
+	hseKeyType_t type;
 	bool acquired;
 };
 
 TEE_Result hse_srv_req_sync(uint8_t channel, const void *srv_desc);
 
-struct hse_key *hse_key_slot_acquire(enum hse_key_type type);
+struct hse_key *hse_key_slot_acquire(hseKeyType_t type);
 void hse_key_slot_release(struct hse_key *slot);
 
 #endif /* HSE_CORE_H */

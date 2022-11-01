@@ -5,8 +5,8 @@
 
 #include <arm.h>
 #include <atomic.h>
-#include <hse_abi.h>
 #include <hse_cipher.h>
+#include <hse_interface.h>
 #include <hse_util.h>
 #include <hse_core.h>
 #include <hse_huk.h>
@@ -28,7 +28,7 @@
  */
 struct hse_key_ring {
 	struct hse_key *slots;
-	size_t size;
+	hseKeySlotIdx_t size;
 	unsigned int lock;
 };
 
@@ -47,16 +47,16 @@ struct hse_drvdata {
 	struct {
 		void  *ptr;
 		paddr_t dma;
-		uint32_t id;
-	} srv_desc[HSE_NUM_CHANNELS];
+		hseSrvId_t id;
+	} srv_desc[HSE_NUM_OF_CHANNELS_PER_MU];
 	void *mu;
-	bool channel_busy[HSE_NUM_CHANNELS];
-	enum hse_ch_type type[HSE_NUM_CHANNELS];
+	bool channel_busy[HSE_NUM_OF_CHANNELS_PER_MU];
+	enum hse_ch_type type[HSE_NUM_OF_CHANNELS_PER_MU];
 	struct hse_key_ring aes_key_ring;
 	struct hse_key_ring sh_secret_key_ring;
 	struct hse_key_ring hmac_key_ring;
 	unsigned int tx_lock;
-	struct hse_attr_fw_version firmware_version;
+	hseAttrFwVersion_t firmware_version;
 };
 
 static struct hse_drvdata *drv;
@@ -104,13 +104,13 @@ static TEE_Result hse_err_decode(uint32_t srv_rsp)
  * Copy descriptor to the dedicated space and cache service ID internally.
  */
 static inline void hse_sync_srv_desc(uint8_t channel,
-				     const struct hse_srv_desc *srv_desc)
+				     const hseSrvDescriptor_t *srv_desc)
 {
-	if (channel >= HSE_NUM_CHANNELS || !srv_desc)
+	if (channel >= HSE_NUM_OF_CHANNELS_PER_MU || !srv_desc)
 		return;
 
 	memcpy(drv->srv_desc[channel].ptr, srv_desc, sizeof(*srv_desc));
-	drv->srv_desc[channel].id = srv_desc->srv_id;
+	drv->srv_desc[channel].id = srv_desc->srvId;
 }
 
 /**
@@ -147,7 +147,8 @@ TEE_Result hse_srv_req_sync(uint8_t channel, const void *srv_desc)
 	if (!srv_desc)
 		return TEE_ERROR_BAD_PARAMETERS;
 
-	if (channel != HSE_CHANNEL_ANY && channel >= HSE_NUM_CHANNELS)
+	if (channel != HSE_CHANNEL_ANY &&
+	    channel >= HSE_NUM_OF_CHANNELS_PER_MU)
 		return TEE_ERROR_BAD_PARAMETERS;
 
 	exceptions = cpu_spin_lock_xsave(&drv->tx_lock);
@@ -205,11 +206,12 @@ out:
  * Return: TEE_SUCCESS or error code for failed key ring initialization
  */
 static TEE_Result hse_key_ring_init(struct hse_key_ring *key_ring,
-				    enum hse_key_type type,
-				    uint8_t group_id, uint8_t group_size)
+				    hseKeyType_t type,
+				    hseKeyGroupIdx_t group_id,
+				    hseKeySlotIdx_t group_size)
 {
 	struct hse_key *slots;
-	unsigned int i;
+	hseKeySlotIdx_t i;
 
 	if (!group_size)
 		return TEE_ERROR_BAD_PARAMETERS;
@@ -219,7 +221,8 @@ static TEE_Result hse_key_ring_init(struct hse_key_ring *key_ring,
 		return TEE_ERROR_OUT_OF_MEMORY;
 
 	for (i = 0; i < group_size; i++) {
-		slots[i].handle = HSE_KEY_HANDLE(group_id, i);
+		slots[i].handle = GET_KEY_HANDLE(HSE_KEY_CATALOG_ID_RAM,
+						 group_id, i);
 		slots[i].type = type;
 		slots[i].acquired = false;
 	}
@@ -251,7 +254,7 @@ static inline void hse_key_ring_free(struct hse_key_ring *key_ring)
  * hse_get_key_ring - get a pointer to a key ring based on its type
  * @type: type of keys stored in the key ring
  */
-static struct hse_key_ring *hse_get_key_ring(enum hse_key_type type)
+static struct hse_key_ring *hse_get_key_ring(hseKeyType_t type)
 {
 	switch (type) {
 	case HSE_KEY_TYPE_AES:
@@ -271,11 +274,11 @@ static struct hse_key_ring *hse_get_key_ring(enum hse_key_type type)
  *
  * Return: key slot of specified type if available, NULL otherwise
  */
-struct hse_key *hse_key_slot_acquire(enum hse_key_type type)
+struct hse_key *hse_key_slot_acquire(hseKeyType_t type)
 {
 	struct hse_key_ring *key_ring;
 	struct hse_key *slot = NULL, *ring_slots;
-	size_t i;
+	hseKeySlotIdx_t i;
 	uint32_t exceptions;
 
 	key_ring = hse_get_key_ring(type);
@@ -306,7 +309,7 @@ void hse_key_slot_release(struct hse_key *slot)
 {
 	struct hse_key_ring *key_ring;
 	struct hse_key *ring_slots;
-	size_t i;
+	hseKeySlotIdx_t i;
 	uint32_t exceptions;
 
 	if (!slot)
@@ -347,13 +350,13 @@ static inline void hse_config_channels(void)
 	drv->srv_desc[0].dma = hse_mu_desc_base_dma(drv->mu);
 	drv->channel_busy[0] = false;
 
-	for (channel = 1; channel < HSE_NUM_CHANNELS; channel++) {
-		if (channel >= HSE_NUM_CHANNELS - HSE_STREAM_COUNT)
+	for (channel = 1; channel < HSE_NUM_OF_CHANNELS_PER_MU; channel++) {
+		if (channel >= HSE_NUM_OF_CHANNELS_PER_MU - HSE_STREAM_COUNT)
 			drv->type[channel] = HSE_CH_TYPE_STREAM;
 		else
 			drv->type[channel] = HSE_CH_TYPE_SHARED;
 
-		offset = channel * HSE_SRV_DESC_MAX_SIZE;
+		offset = channel * HSE_MAX_DESCR_SIZE;
 		ch_addr = (vaddr_t)drv->srv_desc[0].ptr + offset;
 
 		drv->srv_desc[channel].ptr = (void *)ch_addr;
@@ -371,19 +374,19 @@ static inline void hse_config_channels(void)
 static TEE_Result hse_check_fw_version(void)
 {
 	TEE_Result err;
-	struct hse_srv_desc srv_desc;
+	hseSrvDescriptor_t srv_desc;
 	struct hse_buf buf;
 
-	err = hse_buf_alloc(&buf, sizeof(struct hse_attr_fw_version));
+	err = hse_buf_alloc(&buf, sizeof(hseAttrFwVersion_t));
 	if (err != TEE_SUCCESS) {
 		DMSG("failed to allocate buffer: %d\n", err);
 		return err;
 	}
 
-	srv_desc.srv_id = HSE_SRV_ID_GET_ATTR;
-	srv_desc.get_attr_req.attr_id = HSE_FW_VERSION_ATTR_ID;
-	srv_desc.get_attr_req.attr_len = buf.size;
-	srv_desc.get_attr_req.attr = buf.paddr;
+	srv_desc.srvId = HSE_SRV_ID_GET_ATTR;
+	srv_desc.hseSrv.getAttrReq.attrId = HSE_FW_VERSION_ATTR_ID;
+	srv_desc.hseSrv.getAttrReq.attrLen = buf.size;
+	srv_desc.hseSrv.getAttrReq.pAttr = buf.paddr;
 
 	err = hse_srv_req_sync(HSE_CHANNEL_ADM, &srv_desc);
 	if (err) {
@@ -436,10 +439,11 @@ static TEE_Result crypto_driver_init(void)
 		goto out_free_mu;
 
 	DMSG("%s firmware, version %d.%d.%d\n",
-	     drv->firmware_version.fw_type == 0 ? "standard" :
-	     (drv->firmware_version.fw_type == 1 ? "premium" : "custom"),
-	     drv->firmware_version.major, drv->firmware_version.minor,
-	     drv->firmware_version.patch);
+	     drv->firmware_version.fwTypeId == 0 ? "standard" :
+	     (drv->firmware_version.fwTypeId == 1 ? "premium" : "custom"),
+	     drv->firmware_version.majorVersion,
+	     drv->firmware_version.minorVersion,
+	     drv->firmware_version.patchVersion);
 
 	err = hse_key_ring_init(&drv->aes_key_ring, HSE_KEY_TYPE_AES,
 				CFG_HSE_AES_KEY_GROUP_ID,
