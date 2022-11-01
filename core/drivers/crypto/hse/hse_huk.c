@@ -4,9 +4,9 @@
  */
 
 #include <assert.h>
-#include <hse_abi.h>
 #include <hse_core.h>
 #include <hse_huk.h>
+#include <hse_interface.h>
 #include <hse_util.h>
 #include <kernel/tee_common_otp.h>
 #include <tee/cache.h>
@@ -20,27 +20,22 @@ static bool key_retrieved;
 static TEE_Result hse_extract_step(struct hse_key *key_slot)
 {
 	TEE_Result ret = TEE_SUCCESS;
-	struct hse_srv_desc srv_desc;
-	struct hse_key_derive_srv derive_req;
+	hseSrvDescriptor_t srv_desc;
+	hseKeyDeriveSrv_t derive_req;
 
 	if (!key_slot)
 		return TEE_ERROR_BAD_PARAMETERS;
 
-	derive_req.kdf_algo = HSE_KDF_ALGO_EXTRACT_STEP;
-	derive_req.extract_step.secret_key_handle = HSE_ROM_KEY_AES256_KEY1;
-	derive_req.extract_step.target_key_handle = key_slot->handle;
-	derive_req.extract_step.kdf_prf = HSE_KDF_PRF_HMAC;
-	derive_req.extract_step.hmac_hash = HSE_HASH_ALGO_SHA2_256;
-	derive_req.extract_step.salt_key_handle = HSE_INVALID_KEY_HANDLE;
-	derive_req.extract_step.salt = 0;
+	derive_req.kdfAlgo = HSE_KDF_ALGO_EXTRACT_STEP;
+	derive_req.sch.extractStep.secretKeyHandle = HSE_ROM_KEY_AES256_KEY1;
+	derive_req.sch.extractStep.targetKeyHandle = key_slot->handle;
+	derive_req.sch.extractStep.kdfPrf = HSE_KDF_PRF_HMAC;
+	derive_req.sch.extractStep.prfAlgo.hmacHash = HSE_HASH_ALGO_SHA2_256;
+	derive_req.sch.extractStep.salt.saltKeyHandle = HSE_INVALID_KEY_HANDLE;
+	derive_req.sch.extractStep.salt.pSalt = 0;
 
-	/* Reserved field is not used, but using an uninitialized value
-	 * triggers a coverity error
-	 */
-	memset(derive_req.reserved, 0x0, sizeof(derive_req.reserved));
-
-	srv_desc.srv_id = HSE_SRV_ID_KEY_DERIVE;
-	srv_desc.key_derive_req = derive_req;
+	srv_desc.srvId = HSE_SRV_ID_KEY_DERIVE;
+	srv_desc.hseSrv.keyDeriveReq = derive_req;
 
 	ret = hse_srv_req_sync(HSE_CHANNEL_ANY, &srv_desc);
 	if (ret != TEE_SUCCESS)
@@ -52,23 +47,23 @@ static TEE_Result hse_extract_step(struct hse_key *key_slot)
 static TEE_Result hse_expand_step(struct hse_key *key_slot)
 {
 	TEE_Result ret = TEE_SUCCESS;
-	struct hse_srv_desc srv_desc;
-	struct hse_kdf_common_params kdf_common;
+	hseSrvDescriptor_t srv_desc;
+	hseKdfCommonParams_t kdf_common;
 
 	if (!key_slot)
 		return TEE_ERROR_BAD_PARAMETERS;
 
-	kdf_common.src_key_handle = key_slot->handle;
-	kdf_common.target_key_handle = key_slot->handle;
-	kdf_common.key_mat_len = HSE_HUK_LENGTH;
-	kdf_common.kdf_prf = HSE_KDF_PRF_HMAC;
-	kdf_common.hmac_hash = HSE_HASH_ALGO_SHA2_256;
-	kdf_common.p_info = 0;
-	kdf_common.info_len = 0;
+	kdf_common.srcKeyHandle = key_slot->handle;
+	kdf_common.targetKeyHandle = key_slot->handle;
+	kdf_common.keyMatLen = HSE_HUK_LENGTH;
+	kdf_common.kdfPrf = HSE_KDF_PRF_HMAC;
+	kdf_common.prfAlgo.hmacHash = HSE_HASH_ALGO_SHA2_256;
+	kdf_common.pInfo = 0;
+	kdf_common.infoLength = 0;
 
-	srv_desc.srv_id = HSE_SRV_ID_KEY_DERIVE;
-	srv_desc.key_derive_req.kdf_algo = HSE_KDF_ALGO_HKDF_EXPAND;
-	srv_desc.key_derive_req.hkdf_expand.kdf_common = kdf_common;
+	srv_desc.srvId = HSE_SRV_ID_KEY_DERIVE;
+	srv_desc.hseSrv.keyDeriveReq.kdfAlgo = HSE_KDF_ALGO_HKDF_EXPAND;
+	srv_desc.hseSrv.keyDeriveReq.sch.HKDF_Expand.kdfCommon = kdf_common;
 
 	ret = hse_srv_req_sync(HSE_CHANNEL_ANY, &srv_desc);
 	if (ret != TEE_SUCCESS)
@@ -82,10 +77,10 @@ static TEE_Result hse_copy_and_extract(struct hse_key *src_slot,
 				       uint8_t *data)
 {
 	TEE_Result ret = TEE_SUCCESS;
-	struct hse_srv_desc srv_desc;
+	hseSrvDescriptor_t srv_desc;
 	uint16_t flags, bit_len;
 	struct hse_buf keyinf, keybuf, keysize;
-	struct hse_sym_cipher_scheme sym_cipher;
+	hseSymCipherScheme_t sym_cipher;
 
 	if (!src_slot || !dst_slot || !data)
 		return TEE_ERROR_BAD_PARAMETERS;
@@ -93,14 +88,14 @@ static TEE_Result hse_copy_and_extract(struct hse_key *src_slot,
 	flags = HSE_KF_ACCESS_EXPORTABLE | HSE_KF_USAGE_SIGN;
 	bit_len = HSE_HUK_LENGTH * 8;
 
-	srv_desc.srv_id = HSE_SRV_ID_KEY_DERIVE_COPY;
-	srv_desc.key_derive_copy_key_req.key_handle = src_slot->handle;
-	srv_desc.key_derive_copy_key_req.start_offset = 0;
-	srv_desc.key_derive_copy_key_req.target_key_handle = dst_slot->handle;
-	srv_desc.key_derive_copy_key_req.key_info.key_flags = flags;
-	srv_desc.key_derive_copy_key_req.key_info.key_bit_len = bit_len;
-	srv_desc.key_derive_copy_key_req.key_info.smr_flags = 0;
-	srv_desc.key_derive_copy_key_req.key_info.key_type = HSE_KEY_TYPE_HMAC;
+	srv_desc.srvId = HSE_SRV_ID_KEY_DERIVE_COPY;
+	srv_desc.hseSrv.keyDeriveCopyKeyReq.keyHandle = src_slot->handle;
+	srv_desc.hseSrv.keyDeriveCopyKeyReq.startOffset = 0;
+	srv_desc.hseSrv.keyDeriveCopyKeyReq.targetKeyHandle = dst_slot->handle;
+	srv_desc.hseSrv.keyDeriveCopyKeyReq.keyInfo.keyFlags = flags;
+	srv_desc.hseSrv.keyDeriveCopyKeyReq.keyInfo.keyBitLen = bit_len;
+	srv_desc.hseSrv.keyDeriveCopyKeyReq.keyInfo.smrFlags = 0;
+	srv_desc.hseSrv.keyDeriveCopyKeyReq.keyInfo.keyType = HSE_KEY_TYPE_HMAC;
 
 	ret = hse_srv_req_sync(HSE_CHANNEL_ANY, &srv_desc);
 	if (ret != TEE_SUCCESS) {
@@ -108,7 +103,7 @@ static TEE_Result hse_copy_and_extract(struct hse_key *src_slot,
 		return ret;
 	}
 
-	ret = hse_buf_alloc(&keyinf, sizeof(struct hse_key_info));
+	ret = hse_buf_alloc(&keyinf, sizeof(hseKeyInfo_t));
 	if (ret != TEE_SUCCESS)
 		return ret;
 
@@ -123,19 +118,21 @@ static TEE_Result hse_copy_and_extract(struct hse_key *src_slot,
 
 	cache_operation(TEE_CACHEFLUSH, keysize.data, keysize.size);
 
-	sym_cipher.algo = HSE_CIPHER_ALGO_AES;
-	sym_cipher.block_mode = HSE_CIPHER_BLOCK_MODE_ECB;
-	sym_cipher.iv_len = 0;
+	sym_cipher.cipherAlgo = HSE_CIPHER_ALGO_AES;
+	sym_cipher.cipherBlockMode = HSE_CIPHER_BLOCK_MODE_ECB;
+	sym_cipher.ivLength = 0;
 
-	srv_desc.srv_id = HSE_SRV_ID_EXPORT_KEY;
-	srv_desc.export_key_req.key_handle = dst_slot->handle;
-	srv_desc.export_key_req.key_info = keyinf.paddr;
-	srv_desc.export_key_req.sym.key = keybuf.paddr;
-	srv_desc.export_key_req.sym.keylen = keysize.paddr;
-	srv_desc.export_key_req.cipher.cipher_key_handle =
+	srv_desc.srvId = HSE_SRV_ID_EXPORT_KEY;
+	srv_desc.hseSrv.exportKeyReq.targetKeyHandle = dst_slot->handle;
+	srv_desc.hseSrv.exportKeyReq.pKeyInfo = keyinf.paddr;
+	srv_desc.hseSrv.exportKeyReq.pKey[2] = keybuf.paddr;
+	srv_desc.hseSrv.exportKeyReq.pKeyLen[2] = keysize.paddr;
+	srv_desc.hseSrv.exportKeyReq.cipher.cipherKeyHandle =
 		HSE_ROM_KEY_AES256_KEY1;
-	srv_desc.export_key_req.cipher.sym_cipher = sym_cipher;
-	srv_desc.export_key_req.auth_key = HSE_INVALID_KEY_HANDLE;
+	srv_desc.hseSrv.exportKeyReq.cipher.cipherScheme.symCipher =
+		sym_cipher;
+	srv_desc.hseSrv.exportKeyReq.keyContainer.authKeyHandle =
+		HSE_INVALID_KEY_HANDLE;
 
 	ret = hse_srv_req_sync(HSE_CHANNEL_ANY, &srv_desc);
 	if (ret != TEE_SUCCESS) {
