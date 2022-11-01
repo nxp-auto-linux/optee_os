@@ -5,9 +5,9 @@
 
 #include <drvcrypt.h>
 #include <drvcrypt_cipher.h>
-#include <hse_abi.h>
 #include <hse_cipher.h>
 #include <hse_core.h>
+#include <hse_interface.h>
 #include <hse_util.h>
 #include <mm/core_memprot.h>
 #include <string.h>
@@ -34,9 +34,9 @@ struct hse_cipher_tpl {
 	char cipher_name[128];
 	unsigned int blocksize;
 	unsigned int ivsize;
-	enum hse_cipher_algorithm cipher_type;
-	enum hse_block_mode block_mode;
-	enum hse_key_type key_type;
+	hseCipherAlgo_t cipher_type;
+	hseCipherBlockMode_t block_mode;
+	hseKeyType_t key_type;
 };
 
 /**
@@ -52,7 +52,7 @@ struct hse_cipher_ctx {
 	uint8_t key[AES_KEY_SIZE_256];
 	size_t key_len;
 	struct hse_key *key_slot;
-	enum hse_cipher_dir direction;
+	hseCipherDir_t direction;
 };
 
 /* Constant array of templates for cipher algorithms */
@@ -112,13 +112,14 @@ static const struct hse_cipher_tpl *get_cipheralgo(uint32_t algo)
 	return NULL;
 }
 
-static TEE_Result hse_import_key(struct drvcrypt_buf key, uint8_t key_type,
-				 uint32_t key_handle)
+static TEE_Result hse_import_key(struct drvcrypt_buf key, hseKeyType_t key_type,
+				 hseKeyHandle_t key_handle)
 {
 	TEE_Result ret = TEE_SUCCESS;
 	struct hse_buf keybuf, keyinf;
-	struct hse_key_info *key_inf_buf;
-	struct hse_srv_desc srv_desc;
+	hseKeyInfo_t *key_inf_buf;
+	hseSrvDescriptor_t srv_desc;
+	hseImportKeySrv_t import_key_req;
 
 	ret = hse_buf_alloc(&keybuf, key.length);
 	if (ret != TEE_SUCCESS)
@@ -126,23 +127,25 @@ static TEE_Result hse_import_key(struct drvcrypt_buf key, uint8_t key_type,
 
 	memcpy(keybuf.data, key.data, key.length);
 
-	ret = hse_buf_alloc(&keyinf, sizeof(struct hse_key_info));
+	ret = hse_buf_alloc(&keyinf, sizeof(hseKeyInfo_t));
 	if (ret != TEE_SUCCESS)
 		goto out_free_keybuf;
 
-	key_inf_buf = (struct hse_key_info *)keyinf.data;
-	key_inf_buf->key_flags = HSE_KF_USAGE_ENCRYPT | HSE_KF_USAGE_DECRYPT;
-	key_inf_buf->key_bit_len = keybuf.size * 8;
-	key_inf_buf->key_type = key_type;
-	key_inf_buf->smr_flags = 0;
+	key_inf_buf = (hseKeyInfo_t *)((void *)keyinf.data);
+	key_inf_buf->keyFlags = HSE_KF_USAGE_ENCRYPT | HSE_KF_USAGE_DECRYPT;
+	key_inf_buf->keyBitLen = keybuf.size * 8;
+	key_inf_buf->keyType = key_type;
+	key_inf_buf->smrFlags = 0;
 
-	srv_desc.srv_id = HSE_SRV_ID_IMPORT_KEY;
-	srv_desc.import_key_req.key_handle = key_handle;
-	srv_desc.import_key_req.key_info = keyinf.paddr;
-	srv_desc.import_key_req.sym.key = keybuf.paddr;
-	srv_desc.import_key_req.sym.keylen = keybuf.size;
-	srv_desc.import_key_req.cipher_key = HSE_INVALID_KEY_HANDLE;
-	srv_desc.import_key_req.auth_key = HSE_INVALID_KEY_HANDLE;
+	srv_desc.srvId = HSE_SRV_ID_IMPORT_KEY;
+	import_key_req.targetKeyHandle = key_handle;
+	import_key_req.pKeyInfo = keyinf.paddr;
+	import_key_req.pKey[2] = keybuf.paddr;
+	import_key_req.keyLen[2] = keybuf.size;
+	import_key_req.cipher.cipherKeyHandle = HSE_INVALID_KEY_HANDLE;
+	import_key_req.keyContainer.authKeyHandle = HSE_INVALID_KEY_HANDLE;
+
+	srv_desc.hseSrv.importKeyReq = import_key_req;
 
 	cache_operation(TEE_CACHEFLUSH, keybuf.data, keybuf.size);
 	cache_operation(TEE_CACHEFLUSH, keyinf.data, keyinf.size);
@@ -244,7 +247,7 @@ static TEE_Result hse_cipher_init(struct drvcrypt_cipher_init *dinit)
 	TEE_Result ret = TEE_SUCCESS;
 	struct hse_cipher_ctx *ctx = dinit->ctx;
 	const struct hse_cipher_tpl *alg = ctx->alg_tpl;
-	uint32_t key_handle = ctx->key_slot->handle;
+	hseKeyHandle_t key_handle = ctx->key_slot->handle;
 
 	if (!dinit->key1.data || !dinit->key1.length) {
 		ret = TEE_ERROR_BAD_PARAMETERS;
@@ -293,7 +296,7 @@ static TEE_Result hse_cipher_update(struct drvcrypt_cipher_update *dupdate)
 	struct hse_buf buf;
 	size_t  src_len, blocksize = alg->blocksize;
 	uint8_t *src_data, *last_block;
-	struct hse_srv_desc srv_desc;
+	hseSrvDescriptor_t srv_desc;
 
 	if (dupdate->src.length < blocksize ||
 	    dupdate->src.length % blocksize ||
@@ -311,17 +314,17 @@ static TEE_Result hse_cipher_update(struct drvcrypt_cipher_update *dupdate)
 
 	memcpy(buf.data, src_data, buf.size);
 
-	srv_desc.srv_id = HSE_SRV_ID_SYM_CIPHER;
-	srv_desc.cipher_req.access_mode = HSE_ACCESS_MODE_ONE_PASS;
-	srv_desc.cipher_req.cipher_algo = alg->cipher_type;
-	srv_desc.cipher_req.block_mode = alg->block_mode;
-	srv_desc.cipher_req.cipher_dir = ctx->direction;
-	srv_desc.cipher_req.key_handle = ctx->key_slot->handle;
-	srv_desc.cipher_req.iv = ctx->iv.paddr;
-	srv_desc.cipher_req.sgt_opt = HSE_SGT_OPT_NONE;
-	srv_desc.cipher_req.input_len = buf.size;
-	srv_desc.cipher_req.input = buf.paddr;
-	srv_desc.cipher_req.output = buf.paddr;
+	srv_desc.srvId = HSE_SRV_ID_SYM_CIPHER;
+	srv_desc.hseSrv.symCipherReq.accessMode = HSE_ACCESS_MODE_ONE_PASS;
+	srv_desc.hseSrv.symCipherReq.cipherAlgo = alg->cipher_type;
+	srv_desc.hseSrv.symCipherReq.cipherBlockMode = alg->block_mode;
+	srv_desc.hseSrv.symCipherReq.cipherDir = ctx->direction;
+	srv_desc.hseSrv.symCipherReq.keyHandle = ctx->key_slot->handle;
+	srv_desc.hseSrv.symCipherReq.pIV = ctx->iv.paddr;
+	srv_desc.hseSrv.symCipherReq.sgtOption = HSE_SGT_OPTION_NONE;
+	srv_desc.hseSrv.symCipherReq.inputLength = buf.size;
+	srv_desc.hseSrv.symCipherReq.pInput = buf.paddr;
+	srv_desc.hseSrv.symCipherReq.pOutput = buf.paddr;
 
 	cache_operation(TEE_CACHEFLUSH, buf.data, buf.size);
 	cache_operation(TEE_CACHEFLUSH, ctx->iv.data, alg->ivsize);
