@@ -16,9 +16,6 @@
 #include <types_ext.h>
 #include <tee_api_types.h>
 
-#define HSE_NUM_CHANNELS    16u /* number of available service channels */
-#define HSE_STREAM_COUNT    4u /* number of usable streams per MU instance */
-
 #define HSE_CHANNEL_INV    0xFFu /* invalid acquired service channel index */
 #define HSE_CH_MASK_ALL    0x0000FFFFul /* all available channels irq mask */
 

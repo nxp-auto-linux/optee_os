@@ -10,6 +10,7 @@
 
 #include <bitstring.h>
 #include <hse_dt.h>
+#include <hse_interface.h>
 #include <hse_mu.h>
 #include <io.h>
 #include <malloc.h>
@@ -176,7 +177,7 @@ static bool hse_mu_channel_available(void *mu, uint8_t channel)
 	struct hse_mu_data *priv = mu;
 	uint32_t fsrval, tsrval, rsrval;
 
-	if (channel >= HSE_NUM_CHANNELS)
+	if (channel >= HSE_NUM_OF_CHANNELS_PER_MU)
 		return false;
 
 	fsrval = hse_ioread32(&priv->regs->fsr) & BIT(channel);
@@ -227,7 +228,7 @@ bool hse_mu_msg_pending(void *mu, uint8_t channel)
 	struct hse_mu_data *priv = mu;
 	uint32_t rsrval;
 
-	if (!mu || channel >= HSE_NUM_CHANNELS)
+	if (!mu || channel >= HSE_NUM_OF_CHANNELS_PER_MU)
 		return false;
 
 	rsrval = hse_ioread32(&priv->regs->rsr) & BIT(channel);
@@ -253,7 +254,7 @@ TEE_Result hse_mu_msg_send(void *mu, uint8_t channel, uint32_t msg)
 	if (!mu)
 		return TEE_ERROR_BAD_PARAMETERS;
 
-	if (channel >= HSE_NUM_CHANNELS)
+	if (channel >= HSE_NUM_OF_CHANNELS_PER_MU)
 		return TEE_ERROR_BAD_PARAMETERS;
 
 	if (!hse_mu_channel_available(mu, channel)) {
@@ -282,7 +283,7 @@ TEE_Result hse_mu_msg_recv(void *mu, uint8_t channel, uint32_t *msg)
 	if (!mu || !msg)
 		return TEE_ERROR_BAD_PARAMETERS;
 
-	if (channel >= HSE_NUM_CHANNELS)
+	if (channel >= HSE_NUM_OF_CHANNELS_PER_MU)
 		return TEE_ERROR_BAD_PARAMETERS;
 
 	if (!hse_mu_msg_pending(mu, channel)) {
@@ -384,7 +385,7 @@ void *hse_mu_init(void)
 	hse_mu_irq_disable(mu, HSE_INT_SYS_EVENT, HSE_EVT_MASK_ALL);
 
 	/* discard any pending messages */
-	for (channel = 0; channel < HSE_NUM_CHANNELS; channel++)
+	for (channel = 0; channel < HSE_NUM_OF_CHANNELS_PER_MU; channel++)
 		if (hse_mu_msg_pending(mu, channel)) {
 			res = hse_mu_msg_recv(mu, channel, &msg);
 			if (res == TEE_SUCCESS)
