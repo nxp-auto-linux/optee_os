@@ -7,7 +7,6 @@
 #include <atomic.h>
 #include <hse_cipher.h>
 #include <hse_interface.h>
-#include <hse_util.h>
 #include <hse_core.h>
 #include <hse_huk.h>
 #include <hse_mu.h>

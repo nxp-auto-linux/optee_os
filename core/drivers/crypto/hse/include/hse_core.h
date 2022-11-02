@@ -8,6 +8,7 @@
 
 #include <hse_keymgmt_common_types.h>
 #include <tee_api_types.h>
+#include <types_ext.h>
 
 #define HSE_CHANNEL_ANY    0xACu /* use any channel, no request ordering */
 #define HSE_CHANNEL_ADM    0u /* channel reserved for administrative services */
@@ -35,6 +36,21 @@ struct hse_key {
 	hseKeyType_t type;
 	bool acquired;
 };
+
+/**
+ * struct hse_buf - HSE buffer management struct
+ * @data: data buffer
+ * @paddr: physical address of the buffer
+ * @size: number of bytes in the data buffer
+ */
+struct hse_buf {
+	uint8_t *data; /* Data buffer */
+	paddr_t paddr; /* Physical address of the buffer */
+	size_t size;   /* Number of bytes in the data buffer */
+};
+
+TEE_Result hse_buf_alloc(struct hse_buf *buf, size_t size);
+void hse_buf_free(struct hse_buf *buf);
 
 TEE_Result hse_srv_req_sync(uint8_t channel, const void *srv_desc);
 

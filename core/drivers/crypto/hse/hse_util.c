@@ -3,7 +3,7 @@
  * Copyright 2022 NXP
  */
 
-#include <hse_util.h>
+#include <hse_core.h>
 #include <malloc.h>
 #include <platform_config.h>
 #include <mm/core_memprot.h>
