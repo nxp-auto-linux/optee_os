@@ -5,11 +5,10 @@
 
 #include <arm.h>
 #include <atomic.h>
-#include <hse_cipher.h>
 #include <hse_interface.h>
 #include <hse_core.h>
-#include <hse_huk.h>
 #include <hse_mu.h>
+#include <hse_services.h>
 #include <initcall.h>
 #include <kernel/interrupt.h>
 #include <kernel/spinlock.h>

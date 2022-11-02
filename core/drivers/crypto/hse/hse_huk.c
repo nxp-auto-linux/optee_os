@@ -5,8 +5,8 @@
 
 #include <assert.h>
 #include <hse_core.h>
-#include <hse_huk.h>
 #include <hse_interface.h>
+#include <hse_services.h>
 #include <kernel/tee_common_otp.h>
 #include <tee/cache.h>
 #include <trace.h>

@@ -5,9 +5,9 @@
 
 #include <drvcrypt.h>
 #include <drvcrypt_cipher.h>
-#include <hse_cipher.h>
 #include <hse_core.h>
 #include <hse_interface.h>
+#include <hse_services.h>
 #include <mm/core_memprot.h>
 #include <string.h>
 #include <tee/cache.h>
