@@ -86,10 +86,6 @@ endif
 endif
 
 $(call force,CFG_NXP_HSE,y)
-# There are 4 channels numbered 0 to 3.
-# By default, the third channel is used in OP-TEE.
-CFG_HSE_MU_ID ?= 2
-$(call force,CFG_HSE_MU_INST,"mu$(CFG_HSE_MU_ID)b")
 
 CFG_HSE_HMAC_KEY_GROUP_ID ?= 1
 CFG_HSE_HMAC_KEY_GROUP_SIZE ?= 6
