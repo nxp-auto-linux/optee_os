@@ -192,6 +192,7 @@ TEE_Result hse_rng_initialize(void)
 	rand_srv.rngClass = HSE_RNG_CLASS_PTG3;
 	rand_srv.pRandomNum = rng_ctx.cache.paddr;
 
+	memset(&rng_ctx.srv_desc, 0, sizeof(rng_ctx.srv_desc));
 	rng_ctx.srv_desc.srvId = HSE_SRV_ID_GET_RANDOM_NUM;
 	rng_ctx.srv_desc.hseSrv.getRandomNumReq = rand_srv;
 

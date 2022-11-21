@@ -19,8 +19,8 @@ static bool key_retrieved;
 static TEE_Result hse_extract_step(struct hse_key *key_slot)
 {
 	TEE_Result ret = TEE_SUCCESS;
-	hseSrvDescriptor_t srv_desc;
-	hseKeyDeriveSrv_t derive_req;
+	HSE_SRV_INIT(hseSrvDescriptor_t, srv_desc);
+	HSE_SRV_INIT(hseKeyDeriveSrv_t, derive_req);
 
 	if (!key_slot)
 		return TEE_ERROR_BAD_PARAMETERS;
@@ -46,8 +46,8 @@ static TEE_Result hse_extract_step(struct hse_key *key_slot)
 static TEE_Result hse_expand_step(struct hse_key *key_slot)
 {
 	TEE_Result ret = TEE_SUCCESS;
-	hseSrvDescriptor_t srv_desc;
-	hseKdfCommonParams_t kdf_common;
+	HSE_SRV_INIT(hseSrvDescriptor_t, srv_desc);
+	HSE_SRV_INIT(hseKdfCommonParams_t, kdf_common);
 
 	if (!key_slot)
 		return TEE_ERROR_BAD_PARAMETERS;
@@ -76,10 +76,10 @@ static TEE_Result hse_copy_and_extract(struct hse_key *src_slot,
 				       uint8_t *data)
 {
 	TEE_Result ret = TEE_SUCCESS;
-	hseSrvDescriptor_t srv_desc;
+	HSE_SRV_INIT(hseSrvDescriptor_t, srv_desc);
 	uint16_t flags, bit_len;
 	struct hse_buf keyinf, keybuf, keysize;
-	hseSymCipherScheme_t sym_cipher;
+	HSE_SRV_INIT(hseSymCipherScheme_t, sym_cipher);
 
 	if (!src_slot || !dst_slot || !data)
 		return TEE_ERROR_BAD_PARAMETERS;
@@ -120,6 +120,8 @@ static TEE_Result hse_copy_and_extract(struct hse_key *src_slot,
 	sym_cipher.cipherAlgo = HSE_CIPHER_ALGO_AES;
 	sym_cipher.cipherBlockMode = HSE_CIPHER_BLOCK_MODE_ECB;
 	sym_cipher.ivLength = 0;
+
+	memset(&srv_desc, 0, sizeof(srv_desc));
 
 	srv_desc.srvId = HSE_SRV_ID_EXPORT_KEY;
 	srv_desc.hseSrv.exportKeyReq.targetKeyHandle = dst_slot->handle;
