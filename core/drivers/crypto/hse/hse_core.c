@@ -112,6 +112,7 @@ static inline void hse_sync_srv_desc(uint8_t channel,
 	if (channel >= HSE_NUM_OF_CHANNELS_PER_MU || !srv_desc)
 		return;
 
+	memset(drv->srv_desc[channel].ptr, 0, HSE_MAX_DESCR_SIZE);
 	memcpy(drv->srv_desc[channel].ptr, srv_desc, sizeof(*srv_desc));
 	drv->srv_desc[channel].id = srv_desc->srvId;
 }
@@ -513,7 +514,7 @@ static inline void hse_config_channels(void)
 static TEE_Result hse_check_fw_version(void)
 {
 	TEE_Result err;
-	hseSrvDescriptor_t srv_desc;
+	HSE_SRV_INIT(hseSrvDescriptor_t, srv_desc);
 	struct hse_buf buf;
 
 	err = hse_buf_alloc(&buf, sizeof(hseAttrFwVersion_t));

@@ -13,6 +13,9 @@
 #define HSE_CHANNEL_ANY    0xACu /* use any channel, no request ordering */
 #define HSE_CHANNEL_ADM    0u /* channel reserved for administrative services */
 
+#define HSE_SRV_INIT(stype, sname)  \
+	typeof(stype) ((sname)) = {0}
+
 /**
  * enum hse_ch_type - channel type
  * @HSE_CHANNEL_ADMIN: restricted to administrative services

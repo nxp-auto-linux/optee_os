@@ -117,8 +117,8 @@ static TEE_Result hse_import_key(struct drvcrypt_buf key, hseKeyType_t key_type,
 	TEE_Result ret = TEE_SUCCESS;
 	struct hse_buf keybuf, keyinf;
 	hseKeyInfo_t *key_inf_buf;
-	hseSrvDescriptor_t srv_desc;
-	hseImportKeySrv_t import_key_req;
+	HSE_SRV_INIT(hseSrvDescriptor_t, srv_desc);
+	HSE_SRV_INIT(hseImportKeySrv_t, import_key_req);
 
 	ret = hse_buf_alloc(&keybuf, key.length);
 	if (ret != TEE_SUCCESS)
@@ -129,6 +129,7 @@ static TEE_Result hse_import_key(struct drvcrypt_buf key, hseKeyType_t key_type,
 	ret = hse_buf_alloc(&keyinf, sizeof(hseKeyInfo_t));
 	if (ret != TEE_SUCCESS)
 		goto out_free_keybuf;
+	memset(keyinf.data, 0, keyinf.size);
 
 	key_inf_buf = (hseKeyInfo_t *)((void *)keyinf.data);
 	key_inf_buf->keyFlags = HSE_KF_USAGE_ENCRYPT | HSE_KF_USAGE_DECRYPT;
@@ -295,7 +296,7 @@ static TEE_Result hse_cipher_update(struct drvcrypt_cipher_update *dupdate)
 	struct hse_buf buf;
 	size_t  src_len, blocksize = alg->blocksize;
 	uint8_t *src_data, *last_block;
-	hseSrvDescriptor_t srv_desc;
+	HSE_SRV_INIT(hseSrvDescriptor_t, srv_desc);
 
 	if (dupdate->src.length < blocksize ||
 	    dupdate->src.length % blocksize ||
