@@ -17,8 +17,11 @@
 #include <tee/cache.h>
 #include <tee/tee_cryp_utl.h>
 
-#define HSE_RNG_CACHE_MAX    1024u /* total size of driver internal cache */
-#define HSE_RNG_CACHE_MIN    256u /* minimum threshold for cache refill */
+/* total size of driver internal cache */
+#define HSE_RNG_CACHE_MAX    512u
+
+/* minimum threshold for cache refill */
+#define HSE_RNG_CACHE_MIN    (HSE_RNG_CACHE_MAX / 4)
 
 /**
  * struct hse_rng_ctx - RNG context
