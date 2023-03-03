@@ -14,5 +14,6 @@ srcs-$(CFG_APDU_PTA) += apdu.c
 srcs-$(CFG_SCMI_PTA) += scmi.c
 srcs-$(CFG_HWRNG_PTA) += hwrng.c
 srcs-$(CFG_RTC_PTA) += rtc.c
+srcs-$(CFG_HSE_KP_PTA) += hse_kp_pta.c
 
 subdirs-y += bcm
