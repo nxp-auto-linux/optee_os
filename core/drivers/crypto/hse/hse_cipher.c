@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: BSD-3-Clause
 /*
- * Copyright 2022 NXP
+ * Copyright 2022-2023 NXP
  */
 
 #include <drvcrypt.h>
@@ -52,6 +52,8 @@ struct hse_cipher_ctx {
 	size_t key_len;
 	struct hse_key *key_slot;
 	hseCipherDir_t direction;
+	uint8_t prev_data[TEE_AES_BLOCK_SIZE];
+	size_t prev_size;
 };
 
 /* Constant array of templates for cipher algorithms */
@@ -70,6 +72,14 @@ static const struct hse_cipher_tpl hse_cipher_algs_tpl[] = {
 		.ivsize = TEE_AES_BLOCK_SIZE,
 		.cipher_type = HSE_CIPHER_ALGO_AES,
 		.block_mode = HSE_CIPHER_BLOCK_MODE_CBC,
+		.key_type = HSE_KEY_TYPE_AES,
+	},
+	[TEE_CHAIN_MODE_CTR] = {
+		.cipher_name = "ctr(aes)",
+		.blocksize =  TEE_AES_BLOCK_SIZE,
+		.ivsize = TEE_AES_BLOCK_SIZE,
+		.cipher_type = HSE_CIPHER_ALGO_AES,
+		.block_mode = HSE_CIPHER_BLOCK_MODE_CTR,
 		.key_type = HSE_KEY_TYPE_AES,
 	},
 };
@@ -281,6 +291,25 @@ out:
 }
 
 /**
+ * hse_ctr_inc - in counter mode, each time a block is encrypted/decrypted,
+ *               the iv is incremented by 1
+ * @iv: iv
+ * @blks: number of blocks that have been encrypted/decrypted during the
+ *        update operation
+ * @blocksize: size of the block -- 16 for AES-CTR. The iv has the size
+ *             of the block size.
+ */
+static inline void hse_ctr_inc(uint8_t *iv, size_t blks, size_t blocksize)
+{
+	for (; blks > 0; blks--)
+		for (int64_t i = blocksize - 1; i >= 0; i--) {
+			iv[i] = (iv[i] + 1) & 0xff;
+			if (iv[i])
+				break;
+		}
+}
+
+/**
  * hse_cipher_update - performs an encrypt/decrypt transformation
  *		       on the given data
  *
@@ -294,23 +323,52 @@ static TEE_Result hse_cipher_update(struct drvcrypt_cipher_update *dupdate)
 	struct hse_cipher_ctx *ctx = dupdate->ctx;
 	const struct hse_cipher_tpl *alg = ctx->alg_tpl;
 	struct hse_buf buf;
-	size_t  src_len, blocksize = alg->blocksize;
-	uint8_t *src_data, *last_block;
+	size_t  src_len, blocksize = alg->blocksize, blks;
+	size_t prev_size = ctx->prev_size, rem_size;
+	uint8_t *src_data, *last_block, *prev_data = ctx->prev_data;
 	HSE_SRV_INIT(hseSrvDescriptor_t, srv_desc);
 
-	if (dupdate->src.length < blocksize ||
-	    dupdate->src.length % blocksize ||
-	    dupdate->src.length > UINT32_MAX) {
-		ret = TEE_ERROR_BAD_PARAMETERS;
+	switch (alg->block_mode) {
+	case HSE_CIPHER_BLOCK_MODE_ECB:
+	case HSE_CIPHER_BLOCK_MODE_CBC:
+		if (dupdate->src.length < blocksize ||
+		    dupdate->src.length % blocksize ||
+		    dupdate->src.length > UINT32_MAX ||
+		    prev_size != 0) {
+			ret = TEE_ERROR_BAD_PARAMETERS;
+			goto out;
+		}
+
+		break;
+
+	case HSE_CIPHER_BLOCK_MODE_CTR:
+		if (prev_size >= blocksize ||
+		    dupdate->src.length + prev_size > UINT32_MAX) {
+			ret = TEE_ERROR_BAD_PARAMETERS;
+			goto out;
+		}
+
+		break;
+
+	default:
 		goto out;
 	}
 
-	src_data = dupdate->src.data;
-	src_len = dupdate->src.length;
+	/* For NOPAD modes prev_size will always be 0 */
+	src_len = dupdate->src.length + prev_size;
+
+	src_data = malloc(src_len);
+	if (!src_data) {
+		ret = TEE_ERROR_OUT_OF_MEMORY;
+		goto out;
+	}
+
+	memcpy(src_data, prev_data, prev_size);
+	memcpy(src_data + prev_size, dupdate->src.data, dupdate->src.length);
 
 	ret = hse_buf_alloc(&buf, src_len);
 	if (ret != TEE_SUCCESS)
-		goto out;
+		goto out_free_src;
 
 	memcpy(buf.data, src_data, buf.size);
 
@@ -336,7 +394,7 @@ static TEE_Result hse_cipher_update(struct drvcrypt_cipher_update *dupdate)
 	}
 
 	cache_operation(TEE_CACHEINVALIDATE, buf.data, buf.size);
-	memcpy(dupdate->dst.data, buf.data, dupdate->dst.length);
+	memcpy(dupdate->dst.data, buf.data + prev_size, dupdate->dst.length);
 
 	switch (alg->block_mode) {
 	case HSE_CIPHER_BLOCK_MODE_CBC:
@@ -347,12 +405,27 @@ static TEE_Result hse_cipher_update(struct drvcrypt_cipher_update *dupdate)
 
 		memcpy(ctx->iv.data, last_block, alg->ivsize);
 		break;
+
+	case HSE_CIPHER_BLOCK_MODE_CTR:
+		blks = src_len / blocksize;
+		rem_size = src_len % blocksize;
+
+		hse_ctr_inc(ctx->iv.data, blks, blocksize);
+
+		memcpy(prev_data, src_data + blks, rem_size);
+		ctx->prev_size = rem_size;
+
+		break;
+
 	default:
 		break;
 	}
 
 out_free_buf:
 	hse_buf_free(&buf);
+
+out_free_src:
+	free(src_data);
 
 out:
 	if (ret != TEE_SUCCESS) {
@@ -395,6 +468,9 @@ static void hse_cipher_copy_state(void *dst_ctx, void *src_ctx)
 		memcpy(dst->key, src->key, src->key_len);
 		dst->key_len = src->key_len;
 	}
+
+	memcpy(dst->prev_data, src->prev_data, src->prev_size);
+	dst->prev_size = src->prev_size;
 
 	if (!alg->ivsize)
 		return;
