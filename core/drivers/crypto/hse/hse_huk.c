@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: BSD-3-Clause
 /*
- * Copyright 2022 NXP
+ * Copyright 2022-2023 NXP
  */
 
 #include <assert.h>
@@ -209,9 +209,6 @@ out:
 TEE_Result tee_otp_get_hw_unique_key(struct tee_hw_unique_key *hwkey)
 {
 	COMPILE_TIME_ASSERT(sizeof(stored_key) >= sizeof(hwkey->data));
-
-	if (!key_retrieved)
-		return TEE_ERROR_SECURITY;
 
 	memcpy(&hwkey->data[0], &stored_key[0], sizeof(hwkey->data));
 

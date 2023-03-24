@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: BSD-3-Clause
 /*
- * Copyright 2022 NXP
+ * Copyright 2022-2023 NXP
  */
 
 #include <arm.h>
@@ -629,10 +629,8 @@ static TEE_Result crypto_driver_init(void)
 	}
 
 	err = hse_retrieve_huk();
-	if (err != TEE_SUCCESS) {
-		EMSG("HSE HUK could not be retrieved");
-		goto out_free_hmac;
-	}
+	if (err != TEE_SUCCESS)
+		IMSG("HSE HUK could not be retrieved. Using default HUK");
 
 	IMSG("HSE is successfully initialized");
 
