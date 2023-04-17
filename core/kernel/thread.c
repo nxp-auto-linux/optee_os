@@ -377,7 +377,7 @@ short int __noprof thread_get_id_may_fail(void)
 	return ct;
 }
 
-short int thread_get_id(void)
+short int __noprof thread_get_id(void)
 {
 	short int ct = thread_get_id_may_fail();
 
@@ -478,7 +478,28 @@ void __nostackcheck thread_init_core_local_stacks(void)
 	}
 }
 
-struct thread_specific_data *thread_get_tsd(void)
+#if defined(CFG_CORE_PAUTH)
+void thread_init_thread_pauth_keys(void)
+{
+	size_t n = 0;
+
+	for (n = 0; n < CFG_NUM_THREADS; n++)
+		if (crypto_rng_read(&threads[n].keys, sizeof(threads[n].keys)))
+			panic("Failed to init thread pauth keys");
+}
+
+void thread_init_core_local_pauth_keys(void)
+{
+	struct thread_core_local *tcl = thread_core_local;
+	size_t n = 0;
+
+	for (n = 0; n < CFG_TEE_CORE_NB_CORE; n++)
+		if (crypto_rng_read(&tcl[n].keys, sizeof(tcl[n].keys)))
+			panic("Failed to init core local pauth keys");
+}
+#endif
+
+struct thread_specific_data * __noprof thread_get_tsd(void)
 {
 	return &threads[thread_get_id()].tsd;
 }
