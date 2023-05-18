@@ -54,6 +54,8 @@ struct hse_drvdata {
 	struct hse_key_ring aes_key_ring;
 	struct hse_key_ring sh_secret_key_ring;
 	struct hse_key_ring hmac_key_ring;
+	struct hse_key_ring rsapair_key_ring;
+	struct hse_key_ring rsapub_key_ring;
 	unsigned int tx_lock;
 	struct {
 		void (*fn)(TEE_Result err, void *ctx);
@@ -408,6 +410,10 @@ static struct hse_key_ring *hse_get_key_ring(hseKeyType_t type)
 		return &drv->hmac_key_ring;
 	case HSE_KEY_TYPE_SHARED_SECRET:
 		return &drv->sh_secret_key_ring;
+	case HSE_KEY_TYPE_RSA_PAIR:
+		return &drv->rsapair_key_ring;
+	case HSE_KEY_TYPE_RSA_PUB:
+		return &drv->rsapub_key_ring;
 	default:
 		return NULL;
 	}
@@ -485,6 +491,8 @@ static void hse_key_rings_destroy(void)
 	hse_key_ring_free(&drv->aes_key_ring);
 	hse_key_ring_free(&drv->sh_secret_key_ring);
 	hse_key_ring_free(&drv->hmac_key_ring);
+	hse_key_ring_free(&drv->rsapair_key_ring);
+	hse_key_ring_free(&drv->rsapub_key_ring);
 }
 
 /**
@@ -516,6 +524,21 @@ static TEE_Result hse_key_rings_init(void)
 				 CFG_HSE_HMAC_KEY_GROUP_SIZE);
 	if (err != TEE_SUCCESS)
 		goto free_key_rings;
+
+	/* RSA Keys reside only in the NVM Catalog */
+	err = hse_key_ring_alloc(&drv->rsapair_key_ring,
+				 HSE_KEY_TYPE_RSA_PAIR,
+				 HSE_KEY_CATALOG_ID_NVM,
+				 CFG_HSE_RSAPAIR_KEY_GROUP_ID,
+				 CFG_HSE_RSAPAIR_KEY_GROUP_SIZE);
+	if (err != TEE_SUCCESS)
+		goto free_key_rings;
+
+	err = hse_key_ring_alloc(&drv->rsapub_key_ring,
+				 HSE_KEY_TYPE_RSA_PUB,
+				 HSE_KEY_CATALOG_ID_NVM,
+				 CFG_HSE_RSAPUB_KEY_GROUP_ID,
+				 CFG_HSE_RSAPUB_KEY_GROUP_SIZE);
 
 	if (err != TEE_SUCCESS)
 		goto free_key_rings;
