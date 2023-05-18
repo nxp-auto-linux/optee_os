@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: BSD-3-Clause */
 /*
- * Copyright 2022 NXP
+ * Copyright 2022-2023 NXP
  */
 
 #ifndef HSE_SERVICES_H
@@ -10,6 +10,9 @@
 
 /* Cipher Services */
 TEE_Result hse_cipher_register(void);
+
+/* RSA Service */
+TEE_Result hse_rsa_register(void);
 
 /* HUK Services */
 TEE_Result hse_retrieve_huk(void);

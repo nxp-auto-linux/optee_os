@@ -690,6 +690,12 @@ static TEE_Result crypto_driver_init(void)
 		goto out_free_keyrings;
 	}
 
+	err = hse_rsa_register();
+	if (err != TEE_SUCCESS) {
+		EMSG("HSE RSA register failed with err 0x%x", err);
+		goto out_free_keyrings;
+	}
+
 	err = hse_retrieve_huk();
 	if (err != TEE_SUCCESS)
 		IMSG("HSE HUK could not be retrieved. Using default HUK");

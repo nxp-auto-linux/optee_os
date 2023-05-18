@@ -16,3 +16,4 @@ srcs-y += hse_cipher.c
 srcs-y += hse_huk.c
 srcs-y += hse_rng.c
 srcs-$(CFG_HSE_KP_PTA) += hse_kp.c
+srcs-y += hse_rsa.c
