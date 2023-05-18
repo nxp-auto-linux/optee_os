@@ -87,6 +87,7 @@ endif
 
 $(call force,CFG_NXP_HSE,y)
 
+# RAM Catalog Keys
 CFG_HSE_HMAC_KEY_GROUP_ID ?= 1
 CFG_HSE_HMAC_KEY_GROUP_SIZE ?= 6
 

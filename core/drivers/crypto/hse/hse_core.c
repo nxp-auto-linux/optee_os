@@ -337,21 +337,27 @@ static enum itr_return hse_rx_dispatcher(struct itr_handler *h __unused)
 }
 
 /**
- * hse_key_ring_init - initialize all keys in a specific key group
+ * hse_key_ring_alloc - alloc all keys in a specific key group
  * @key_ring: output key ring
  * @type: type of key slot
+ * @catalog_id: RAM/NVM Catalog of the key group
  * @group_id: key group ID
  * @group_size: key group size
  *
  * Return: TEE_SUCCESS or error code for failed key ring initialization
  */
-static TEE_Result hse_key_ring_init(struct hse_key_ring *key_ring,
-				    hseKeyType_t type,
-				    hseKeyGroupIdx_t group_id,
-				    hseKeySlotIdx_t group_size)
+static TEE_Result hse_key_ring_alloc(struct hse_key_ring *key_ring,
+				     hseKeyType_t type,
+				     hseKeyCatalogId_t catalog_id,
+				     hseKeyGroupIdx_t group_id,
+				     hseKeySlotIdx_t group_size)
 {
 	struct hse_key *slots;
 	hseKeySlotIdx_t i;
+
+	if (catalog_id != HSE_KEY_CATALOG_ID_NVM &&
+	    catalog_id != HSE_KEY_CATALOG_ID_RAM)
+		return TEE_ERROR_BAD_PARAMETERS;
 
 	if (!group_size)
 		return TEE_ERROR_BAD_PARAMETERS;
@@ -361,8 +367,7 @@ static TEE_Result hse_key_ring_init(struct hse_key_ring *key_ring,
 		return TEE_ERROR_OUT_OF_MEMORY;
 
 	for (i = 0; i < group_size; i++) {
-		slots[i].handle = GET_KEY_HANDLE(HSE_KEY_CATALOG_ID_RAM,
-						 group_id, i);
+		slots[i].handle = GET_KEY_HANDLE(catalog_id, group_id, i);
 		slots[i].type = type;
 		slots[i].acquired = false;
 	}
@@ -470,6 +475,56 @@ void hse_key_slot_release(struct hse_key *slot)
 		}
 	}
 	cpu_spin_unlock_xrestore(&key_ring->lock, exceptions);
+}
+
+/**
+ * hse_key_rings_destroy - free all key rings
+ */
+static void hse_key_rings_destroy(void)
+{
+	hse_key_ring_free(&drv->aes_key_ring);
+	hse_key_ring_free(&drv->sh_secret_key_ring);
+	hse_key_ring_free(&drv->hmac_key_ring);
+}
+
+/**
+ * hse_key_rings_init - allocates all key rings
+ */
+static TEE_Result hse_key_rings_init(void)
+{
+	TEE_Result err;
+
+	err = hse_key_ring_alloc(&drv->aes_key_ring, HSE_KEY_TYPE_AES,
+				 HSE_KEY_CATALOG_ID_RAM,
+				 CFG_HSE_AES_KEY_GROUP_ID,
+				 CFG_HSE_AES_KEY_GROUP_SIZE);
+	if (err != TEE_SUCCESS)
+		goto free_key_rings;
+
+	err = hse_key_ring_alloc(&drv->sh_secret_key_ring,
+				 HSE_KEY_TYPE_SHARED_SECRET,
+				 HSE_KEY_CATALOG_ID_RAM,
+				 CFG_HSE_SHARED_SECRET_KEY_ID,
+				 CFG_HSE_SHARED_SECRET_GROUP_SIZE);
+	if (err != TEE_SUCCESS)
+		goto free_key_rings;
+
+	err = hse_key_ring_alloc(&drv->hmac_key_ring,
+				 HSE_KEY_TYPE_HMAC,
+				 HSE_KEY_CATALOG_ID_RAM,
+				 CFG_HSE_HMAC_KEY_GROUP_ID,
+				 CFG_HSE_HMAC_KEY_GROUP_SIZE);
+	if (err != TEE_SUCCESS)
+		goto free_key_rings;
+
+	if (err != TEE_SUCCESS)
+		goto free_key_rings;
+
+	return TEE_SUCCESS;
+
+free_key_rings:
+	hse_key_rings_destroy();
+	return err;
 }
 
 /**
@@ -585,25 +640,9 @@ static TEE_Result crypto_driver_init(void)
 	     drv->firmware_version.minorVersion,
 	     drv->firmware_version.patchVersion);
 
-	err = hse_key_ring_init(&drv->aes_key_ring, HSE_KEY_TYPE_AES,
-				CFG_HSE_AES_KEY_GROUP_ID,
-				CFG_HSE_AES_KEY_GROUP_SIZE);
+	err = hse_key_rings_init();
 	if (err != TEE_SUCCESS)
 		goto out_free_mu;
-
-	err = hse_key_ring_init(&drv->sh_secret_key_ring,
-				HSE_KEY_TYPE_SHARED_SECRET,
-				CFG_HSE_SHARED_SECRET_KEY_ID,
-				CFG_HSE_SHARED_SECRET_GROUP_SIZE);
-	if (err != TEE_SUCCESS)
-		goto out_free_aes;
-
-	err = hse_key_ring_init(&drv->hmac_key_ring,
-				HSE_KEY_TYPE_HMAC,
-				CFG_HSE_HMAC_KEY_GROUP_ID,
-				CFG_HSE_HMAC_KEY_GROUP_SIZE);
-	if (err != TEE_SUCCESS)
-		goto out_free_sh;
 
 	if (!(status & HSE_STATUS_RNG_INIT_OK)) {
 		EMSG("HSE RNG bad state");
@@ -613,19 +652,19 @@ static TEE_Result crypto_driver_init(void)
 	err = hse_rng_initialize();
 	if (err != TEE_SUCCESS) {
 		EMSG("HSE RNG Initialization failed with err 0x%x", err);
-		goto out_free_hmac;
+		goto out_free_keyrings;
 	}
 
 	if (!(status & HSE_STATUS_INSTALL_OK)) {
 		EMSG("HSE Key Catalog not formatted");
 		err = TEE_ERROR_BAD_STATE;
-		goto out_free_hmac;
+		goto out_free_keyrings;
 	}
 
 	err = hse_cipher_register();
 	if (err != TEE_SUCCESS) {
 		EMSG("HSE Cipher register failed with err 0x%x", err);
-		goto out_free_hmac;
+		goto out_free_keyrings;
 	}
 
 	err = hse_retrieve_huk();
@@ -636,12 +675,8 @@ static TEE_Result crypto_driver_init(void)
 
 	return TEE_SUCCESS;
 
-out_free_hmac:
-	hse_key_ring_free(&drv->hmac_key_ring);
-out_free_sh:
-	hse_key_ring_free(&drv->sh_secret_key_ring);
-out_free_aes:
-	hse_key_ring_free(&drv->aes_key_ring);
+out_free_keyrings:
+	hse_key_rings_destroy();
 out_free_mu:
 	hse_mu_free(drv->mu);
 out_free_drv:
