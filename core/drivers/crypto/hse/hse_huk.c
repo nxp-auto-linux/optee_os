@@ -12,6 +12,7 @@
 #include <trace.h>
 
 #define HSE_HUK_LENGTH	32
+#define HSE_IV_LENGTH	16
 
 static uint8_t stored_key[HSE_HUK_LENGTH];
 static bool key_retrieved;
@@ -78,7 +79,7 @@ static TEE_Result hse_copy_and_extract(struct hse_key *src_slot,
 	TEE_Result ret = TEE_SUCCESS;
 	HSE_SRV_INIT(hseSrvDescriptor_t, srv_desc);
 	uint16_t flags, bit_len;
-	struct hse_buf keyinf, keybuf, keysize;
+	struct hse_buf keyinf, keybuf, keysize, iv;
 	HSE_SRV_INIT(hseSymCipherScheme_t, sym_cipher);
 
 	if (!src_slot || !dst_slot || !data)
@@ -114,12 +115,18 @@ static TEE_Result hse_copy_and_extract(struct hse_key *src_slot,
 	if (ret != TEE_SUCCESS)
 		goto out_free_keybuf;
 	keysize.data[0] = HSE_HUK_LENGTH;
-
 	cache_operation(TEE_CACHEFLUSH, keysize.data, keysize.size);
 
+	ret = hse_buf_alloc(&iv, HSE_IV_LENGTH);
+	if (ret != TEE_SUCCESS)
+		goto out_free_keysize;
+	memset(iv.data, 0, HSE_IV_LENGTH);
+	cache_operation(TEE_CACHEFLUSH, iv.data, iv.size);
+
 	sym_cipher.cipherAlgo = HSE_CIPHER_ALGO_AES;
-	sym_cipher.cipherBlockMode = HSE_CIPHER_BLOCK_MODE_ECB;
-	sym_cipher.ivLength = 0;
+	sym_cipher.cipherBlockMode = HSE_CIPHER_BLOCK_MODE_CTR;
+	sym_cipher.ivLength = HSE_IV_LENGTH;
+	sym_cipher.pIV = iv.paddr;
 
 	memset(&srv_desc, 0, sizeof(srv_desc));
 
@@ -138,12 +145,15 @@ static TEE_Result hse_copy_and_extract(struct hse_key *src_slot,
 	ret = hse_srv_req_sync(HSE_CHANNEL_ANY, &srv_desc);
 	if (ret != TEE_SUCCESS) {
 		DMSG("HSE Export Key service request failed");
-		goto out_free_keysize;
+		goto out_free_iv;
 	}
 
 	cache_operation(TEE_CACHEINVALIDATE, keybuf.data, keybuf.size);
 
 	memcpy(data, keybuf.data, HSE_HUK_LENGTH);
+
+out_free_iv:
+	hse_buf_free(&iv);
 
 out_free_keysize:
 	hse_buf_free(&keysize);
