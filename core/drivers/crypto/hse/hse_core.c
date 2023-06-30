@@ -19,15 +19,34 @@
 #include <trace.h>
 
 /**
- * struct hse_key_ring - key slot management struct
- * @slots: pointer to an array of key slots
- * @size: number of total key slots
- * @lock: used for key slot acquisition
+ * struct hse_key - HSE key slot
+ * @handle: key handle
+ * @acquired: a key slot has two states: acquired/free
  */
-struct hse_key_ring {
+struct hse_key {
+	hseKeyHandle_t handle;
+	bool acquired;
+};
+
+/**
+ * struct hse_keygroup - key slot management struct
+ * @slots: pointer to an array of key slots
+ * @type: a group has only one key type
+ * @size: number of total key slots
+ * @catalog: the catalog of this keygroup (RAM/NVM)
+ * @id: id of the group
+ * @lock: used for key slot acquisition
+ * @next: link to next group
+ */
+struct hse_keygroup {
 	struct hse_key *slots;
+	hseKeyType_t type;
 	hseKeySlotIdx_t size;
+	hseKeyCatalogId_t catalog;
+	hseKeyGroupIdx_t id;
 	unsigned int lock;
+
+	SLIST_ENTRY(hse_keygroup) next;
 };
 
 /**
@@ -38,7 +57,7 @@ struct hse_key_ring {
  * @mu: MU instance handle returned by lower abstraction layer
  * @type[n]: designated type of service channel n
  * @tx_lock: lock used for service request transmission
- * @aes_key_ring: AES key ring, used for managing key slots
+ * @keygroup_list: list of key groups
  * @rx_cbk: callback functions; used when performing async requests
  * @firmware_version: firmware version
  */
@@ -51,11 +70,7 @@ struct hse_drvdata {
 	void *mu;
 	bool channel_busy[HSE_NUM_OF_CHANNELS_PER_MU];
 	enum hse_ch_type type[HSE_NUM_OF_CHANNELS_PER_MU];
-	struct hse_key_ring aes_key_ring;
-	struct hse_key_ring sh_secret_key_ring;
-	struct hse_key_ring hmac_key_ring;
-	struct hse_key_ring rsapair_key_ring;
-	struct hse_key_ring rsapub_key_ring;
+	SLIST_HEAD(, hse_keygroup) keygroup_list;
 	unsigned int tx_lock;
 	struct {
 		void (*fn)(TEE_Result err, void *ctx);
@@ -339,23 +354,62 @@ static enum itr_return hse_rx_dispatcher(struct itr_handler *h __unused)
 }
 
 /**
- * hse_key_ring_alloc - alloc all keys in a specific key group
- * @key_ring: output key ring
+ * hse_get_keygroup_by_type - returns the keygroup for a specific type
+ * @type: type of key slot
+ *
+ * Return: true if it was allocated, false otherwise
+ */
+static struct hse_keygroup *hse_get_keygroup_by_type(hseKeyType_t type)
+{
+	struct hse_keygroup *keygroup;
+
+	SLIST_FOREACH(keygroup, &drv->keygroup_list, next) {
+		if (keygroup->type == type)
+			return keygroup;
+	}
+
+	return NULL;
+}
+
+/**
+ * hse_get_keygroup_by_id - returns the keygroup based on its id
+ * @id: keygroup id
+ *
+ * Return: true if it was allocated, false otherwise
+ */
+static struct hse_keygroup *hse_get_keygroup_by_id(hseKeyCatalogId_t catalog,
+						   hseKeyGroupIdx_t id)
+{
+	struct hse_keygroup *keygroup;
+
+	SLIST_FOREACH(keygroup, &drv->keygroup_list, next) {
+		if (keygroup->catalog == catalog && keygroup->id == id)
+			return keygroup;
+	}
+
+	return NULL;
+}
+
+/**
+ * hse_keygroup_alloc - alloc all key slots in a specific key group
  * @type: type of key slot
  * @catalog_id: RAM/NVM Catalog of the key group
  * @group_id: key group ID
  * @group_size: key group size
  *
- * Return: TEE_SUCCESS or error code for failed key ring initialization
+ * Return: TEE_SUCCESS or error code for failed key group initialization
  */
-static TEE_Result hse_key_ring_alloc(struct hse_key_ring *key_ring,
-				     hseKeyType_t type,
+static TEE_Result hse_keygroup_alloc(hseKeyType_t type,
 				     hseKeyCatalogId_t catalog_id,
 				     hseKeyGroupIdx_t group_id,
 				     hseKeySlotIdx_t group_size)
 {
-	struct hse_key *slots;
+	struct hse_key *slots = NULL;
 	hseKeySlotIdx_t i;
+	struct hse_keygroup *group = NULL, *new_group = NULL;
+
+	if (hse_get_keygroup_by_type(type))
+		return TEE_SUCCESS;
 
 	if (catalog_id != HSE_KEY_CATALOG_ID_NVM &&
 	    catalog_id != HSE_KEY_CATALOG_ID_RAM)
@@ -370,183 +424,201 @@ static TEE_Result hse_key_ring_alloc(struct hse_key_ring *key_ring,
 
 	for (i = 0; i < group_size; i++) {
 		slots[i].handle = GET_KEY_HANDLE(catalog_id, group_id, i);
-		slots[i].type = type;
 		slots[i].acquired = false;
 	}
 
-	key_ring->slots = slots;
-	key_ring->size = group_size;
-	key_ring->lock = SPINLOCK_UNLOCK;
+	new_group = calloc(0, sizeof(*new_group));
+	if (!new_group) {
+		free(slots);
+		return TEE_ERROR_OUT_OF_MEMORY;
+	}
 
-	DMSG("key ring: group id %d, size %d\n", group_id, group_size);
+	new_group->slots = slots;
+	new_group->type = type;
+	new_group->size = group_size;
+	new_group->catalog = catalog_id;
+	new_group->id = group_id;
+	new_group->lock = SPINLOCK_UNLOCK;
+
+	group = SLIST_FIRST(&drv->keygroup_list);
+	if (group) {
+		while (SLIST_NEXT(group, next))
+			group = SLIST_NEXT(group, next);
+
+		SLIST_INSERT_AFTER(group, new_group, next);
+	} else {
+		SLIST_INSERT_HEAD(&drv->keygroup_list, new_group, next);
+	}
+
+	DMSG("key group id %d, size %d\n", group_id, group_size);
 
 	return TEE_SUCCESS;
 }
 
 /**
- * hse_key_ring_free - remove all keys in a specific key group
- * @key_ring: input key ring
+ * hse_keygroup_free - remove all keys in a specific key group
+ * @keygroup: input key group
  */
-static inline void hse_key_ring_free(struct hse_key_ring *key_ring)
+static inline void hse_keygroup_free(struct hse_keygroup *keygroup)
 {
-	if (!key_ring)
+	if (!keygroup)
 		return;
 
-	key_ring->size = 0;
-	key_ring->lock = SPINLOCK_UNLOCK;
-	free(key_ring->slots);
+	if (keygroup->slots)
+		free(keygroup->slots);
+
+	free(keygroup);
 }
 
 /**
- * hse_get_key_ring - get a pointer to a key ring based on its type
- * @type: type of keys stored in the key ring
+ * hse_keygroups_destroy - free all key groups and remove them
+ *                        from the driver's list
  */
-static struct hse_key_ring *hse_get_key_ring(hseKeyType_t type)
+static void hse_keygroups_destroy(void)
 {
-	switch (type) {
-	case HSE_KEY_TYPE_AES:
-		return &drv->aes_key_ring;
-	case HSE_KEY_TYPE_HMAC:
-		return &drv->hmac_key_ring;
-	case HSE_KEY_TYPE_SHARED_SECRET:
-		return &drv->sh_secret_key_ring;
-	case HSE_KEY_TYPE_RSA_PAIR:
-		return &drv->rsapair_key_ring;
-	case HSE_KEY_TYPE_RSA_PUB:
-		return &drv->rsapub_key_ring;
-	default:
-		return NULL;
+	struct hse_keygroup *group = NULL;
+
+	while (!SLIST_EMPTY(&drv->keygroup_list)) {
+		group = SLIST_FIRST(&drv->keygroup_list);
+
+		SLIST_REMOVE(&drv->keygroup_list, group, hse_keygroup, next);
+		hse_keygroup_free(group);
 	}
 }
 
 /**
- * hse_key_slot_acquire - acquire a HSE key slot
+ * hse_keyslot_acquire - acquire a HSE key slot
  * @type: key type
  *
- * Return: key slot of specified type if available, NULL otherwise
+ * Return: The key handle (unique ID of the key slot),
+ *         HSE_INVALID_KEY_HANDLE in case of error or
+ *         no slot currently available
  */
-struct hse_key *hse_key_slot_acquire(hseKeyType_t type)
+hseKeyHandle_t hse_keyslot_acquire(hseKeyType_t type)
 {
-	struct hse_key_ring *key_ring;
-	struct hse_key *slot = NULL, *ring_slots;
+	struct hse_keygroup *keygroup;
+	struct hse_key *slots;
 	hseKeySlotIdx_t i;
+	hseKeyHandle_t handle = HSE_INVALID_KEY_HANDLE;
 	uint32_t exceptions;
 
-	key_ring = hse_get_key_ring(type);
-	if (!key_ring)
-		return NULL;
+	keygroup = hse_get_keygroup_by_type(type);
+	if (!keygroup)
+		return HSE_INVALID_KEY_HANDLE;
 
-	ring_slots = key_ring->slots;
+	slots = keygroup->slots;
 
-	/* remove key slot from ring */
-	exceptions = cpu_spin_lock_xsave(&key_ring->lock);
-	for (i = 0; i < key_ring->size;  i++) {
-		if (!ring_slots[i].acquired) {
-			ring_slots[i].acquired = true;
-			slot = &ring_slots[i];
+	exceptions = cpu_spin_lock_xsave(&keygroup->lock);
+	for (i = 0; i < keygroup->size;  i++) {
+		if (!slots[i].acquired) {
+			slots[i].acquired = true;
+			handle = slots[i].handle;
 			break;
 		}
 	}
-	cpu_spin_unlock_xrestore(&key_ring->lock, exceptions);
+	cpu_spin_unlock_xrestore(&keygroup->lock, exceptions);
 
-	return slot;
+	return handle;
 }
 
 /**
- * hse_key_slot_release - release a HSE key slot
+ * hse_keyslot_release - release a HSE key slot
  * @slot: key slot
  */
-void hse_key_slot_release(struct hse_key *slot)
+void hse_keyslot_release(hseKeyHandle_t handle)
 {
-	struct hse_key_ring *key_ring;
-	struct hse_key *ring_slots;
-	hseKeySlotIdx_t i;
+	struct hse_keygroup *keygroup = NULL;
+	struct hse_key *slots;
+	hseKeySlotIdx_t slot_id = GET_SLOT_IDX(handle);
+	hseKeyCatalogId_t catalog_id = GET_CATALOG_ID(handle);
+	hseKeyGroupIdx_t group_id = GET_GROUP_IDX(handle);
 	uint32_t exceptions;
 
-	if (!slot)
+	keygroup = hse_get_keygroup_by_id(catalog_id, group_id);
+	if (!keygroup)
 		return;
 
-	key_ring = hse_get_key_ring(slot->type);
-	if (!key_ring)
+	if (slot_id >= keygroup->size)
 		return;
 
-	ring_slots = key_ring->slots;
+	slots = keygroup->slots;
 
-	/* add key slot back to ring */
-	exceptions = cpu_spin_lock_xsave(&key_ring->lock);
-	for (i = 0; i < key_ring->size; i++) {
-		if (slot == &ring_slots[i]) {
-			slot->acquired = false;
-			break;
-		}
-	}
-	cpu_spin_unlock_xrestore(&key_ring->lock, exceptions);
+	exceptions = cpu_spin_lock_xsave(&keygroup->lock);
+	slots[slot_id].acquired = false;
+	cpu_spin_unlock_xrestore(&keygroup->lock, exceptions);
 }
 
 /**
- * hse_key_rings_destroy - free all key rings
+ * hse_keyslot_is_used - checks if a keyslot is part of a keygroup registered
+ *                       by the driver; it DOES NOT check if that keyslot is
+ *                       acquired or not.
+ * @handle: key handle
+ *
+ * Returns true if the slot's keygroup is in use by the driver or false
+ * otherwise
  */
-static void hse_key_rings_destroy(void)
+bool hse_keyslot_is_used(hseKeyHandle_t handle)
 {
-	hse_key_ring_free(&drv->aes_key_ring);
-	hse_key_ring_free(&drv->sh_secret_key_ring);
-	hse_key_ring_free(&drv->hmac_key_ring);
-	hse_key_ring_free(&drv->rsapair_key_ring);
-	hse_key_ring_free(&drv->rsapub_key_ring);
+	hseKeyCatalogId_t catalog = GET_CATALOG_ID(handle);
+	hseKeyCatalogId_t group = GET_GROUP_IDX(handle);
+
+	if (hse_get_keygroup_by_id(catalog, group))
+		return true;
+
+	return false;
 }
 
 /**
- * hse_key_rings_init - allocates all key rings
+ * hse_keygroups_init - allocates all keygroups
+ *
+ * Returns TEE_SUCCESS if the keygroups have been successfully allocated or
+ * TEE_ERROR_* otherwise
  */
-static TEE_Result hse_key_rings_init(void)
+static TEE_Result hse_keygroups_init(void)
 {
 	TEE_Result err;
 
-	err = hse_key_ring_alloc(&drv->aes_key_ring, HSE_KEY_TYPE_AES,
+	err = hse_keygroup_alloc(HSE_KEY_TYPE_AES,
 				 HSE_KEY_CATALOG_ID_RAM,
 				 CFG_HSE_AES_KEY_GROUP_ID,
 				 CFG_HSE_AES_KEY_GROUP_SIZE);
 	if (err != TEE_SUCCESS)
-		goto free_key_rings;
+		goto free_keygroups;
 
-	err = hse_key_ring_alloc(&drv->sh_secret_key_ring,
-				 HSE_KEY_TYPE_SHARED_SECRET,
+	err = hse_keygroup_alloc(HSE_KEY_TYPE_SHARED_SECRET,
 				 HSE_KEY_CATALOG_ID_RAM,
 				 CFG_HSE_SHARED_SECRET_KEY_ID,
 				 CFG_HSE_SHARED_SECRET_GROUP_SIZE);
 	if (err != TEE_SUCCESS)
-		goto free_key_rings;
+		goto free_keygroups;
 
-	err = hse_key_ring_alloc(&drv->hmac_key_ring,
-				 HSE_KEY_TYPE_HMAC,
+	err = hse_keygroup_alloc(HSE_KEY_TYPE_HMAC,
 				 HSE_KEY_CATALOG_ID_RAM,
 				 CFG_HSE_HMAC_KEY_GROUP_ID,
 				 CFG_HSE_HMAC_KEY_GROUP_SIZE);
 	if (err != TEE_SUCCESS)
-		goto free_key_rings;
+		goto free_keygroups;
 
 	/* RSA Keys reside only in the NVM Catalog */
-	err = hse_key_ring_alloc(&drv->rsapair_key_ring,
-				 HSE_KEY_TYPE_RSA_PAIR,
+	err = hse_keygroup_alloc(HSE_KEY_TYPE_RSA_PAIR,
 				 HSE_KEY_CATALOG_ID_NVM,
 				 CFG_HSE_RSAPAIR_KEY_GROUP_ID,
 				 CFG_HSE_RSAPAIR_KEY_GROUP_SIZE);
 	if (err != TEE_SUCCESS)
-		goto free_key_rings;
+		goto free_keygroups;
 
-	err = hse_key_ring_alloc(&drv->rsapub_key_ring,
-				 HSE_KEY_TYPE_RSA_PUB,
+	err = hse_keygroup_alloc(HSE_KEY_TYPE_RSA_PUB,
 				 HSE_KEY_CATALOG_ID_NVM,
 				 CFG_HSE_RSAPUB_KEY_GROUP_ID,
 				 CFG_HSE_RSAPUB_KEY_GROUP_SIZE);
 
 	if (err != TEE_SUCCESS)
-		goto free_key_rings;
+		goto free_keygroups;
 
 	return TEE_SUCCESS;
 
-free_key_rings:
-	hse_key_rings_destroy();
+free_keygroups:
+	hse_keygroups_destroy();
 	return err;
 }
 
@@ -663,7 +735,7 @@ static TEE_Result crypto_driver_init(void)
 	     drv->firmware_version.minorVersion,
 	     drv->firmware_version.patchVersion);
 
-	err = hse_key_rings_init();
+	err = hse_keygroups_init();
 	if (err != TEE_SUCCESS)
 		goto out_free_mu;
 
@@ -675,25 +747,25 @@ static TEE_Result crypto_driver_init(void)
 	err = hse_rng_initialize();
 	if (err != TEE_SUCCESS) {
 		EMSG("HSE RNG Initialization failed with err 0x%x", err);
-		goto out_free_keyrings;
+		goto out_free_keygroups;
 	}
 
 	if (!(status & HSE_STATUS_INSTALL_OK)) {
 		EMSG("HSE Key Catalog not formatted");
 		err = TEE_ERROR_BAD_STATE;
-		goto out_free_keyrings;
+		goto out_free_keygroups;
 	}
 
 	err = hse_cipher_register();
 	if (err != TEE_SUCCESS) {
 		EMSG("HSE Cipher register failed with err 0x%x", err);
-		goto out_free_keyrings;
+		goto out_free_keygroups;
 	}
 
 	err = hse_rsa_register();
 	if (err != TEE_SUCCESS) {
 		EMSG("HSE RSA register failed with err 0x%x", err);
-		goto out_free_keyrings;
+		goto out_free_keygroups;
 	}
 
 	err = hse_retrieve_huk();
@@ -704,8 +776,8 @@ static TEE_Result crypto_driver_init(void)
 
 	return TEE_SUCCESS;
 
-out_free_keyrings:
-	hse_key_rings_destroy();
+out_free_keygroups:
+	hse_keygroups_destroy();
 out_free_mu:
 	hse_mu_free(drv->mu);
 out_free_drv:

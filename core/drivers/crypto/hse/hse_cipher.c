@@ -42,7 +42,7 @@ struct hse_cipher_tpl {
  * struct hse_cipher_ctx - container for all the other contexts
  * @alg_tpl: algorithm template pointer
  * @iv: initialization vector buffer
- * @key_slot: current key entry in cipher key ring
+ * @key_handle: key handle in the AES Key Group
  * @direction: encrypt or decrypt direction
  */
 struct hse_cipher_ctx {
@@ -50,7 +50,7 @@ struct hse_cipher_ctx {
 	struct hse_buf iv;
 	uint8_t key[AES_KEY_SIZE_256];
 	size_t key_len;
-	struct hse_key *key_slot;
+	hseKeyHandle_t key_handle;
 	hseCipherDir_t direction;
 	uint8_t prev_data[TEE_AES_BLOCK_SIZE];
 	size_t prev_size;
@@ -186,7 +186,7 @@ static void hse_cipher_free_ctx(void *ctx)
 		return;
 
 	hse_buf_free(&hse_ctx->iv);
-	hse_key_slot_release(hse_ctx->key_slot);
+	hse_keyslot_release(hse_ctx->key_handle);
 
 	free(hse_ctx);
 }
@@ -225,8 +225,8 @@ static TEE_Result hse_cipher_alloc_ctx(void **ctx, uint32_t algo)
 			goto out_free_ctx;
 	}
 
-	hse_ctx->key_slot = hse_key_slot_acquire(alg_tpl->key_type);
-	if (!hse_ctx->key_slot) {
+	hse_ctx->key_handle = hse_keyslot_acquire(alg_tpl->key_type);
+	if (!hse_ctx->key_handle) {
 		ret = TEE_ERROR_BUSY;
 		goto out_free_iv;
 	}
@@ -257,7 +257,7 @@ static TEE_Result hse_cipher_init(struct drvcrypt_cipher_init *dinit)
 	TEE_Result ret = TEE_SUCCESS;
 	struct hse_cipher_ctx *ctx = dinit->ctx;
 	const struct hse_cipher_tpl *alg = ctx->alg_tpl;
-	hseKeyHandle_t key_handle = ctx->key_slot->handle;
+	hseKeyHandle_t key_handle = ctx->key_handle;
 
 	if (!dinit->key1.data || !dinit->key1.length) {
 		ret = TEE_ERROR_BAD_PARAMETERS;
@@ -377,7 +377,7 @@ static TEE_Result hse_cipher_update(struct drvcrypt_cipher_update *dupdate)
 	srv_desc.hseSrv.symCipherReq.cipherAlgo = alg->cipher_type;
 	srv_desc.hseSrv.symCipherReq.cipherBlockMode = alg->block_mode;
 	srv_desc.hseSrv.symCipherReq.cipherDir = ctx->direction;
-	srv_desc.hseSrv.symCipherReq.keyHandle = ctx->key_slot->handle;
+	srv_desc.hseSrv.symCipherReq.keyHandle = ctx->key_handle;
 	srv_desc.hseSrv.symCipherReq.pIV = ctx->iv.paddr;
 	srv_desc.hseSrv.symCipherReq.sgtOption = HSE_SGT_OPTION_NONE;
 	srv_desc.hseSrv.symCipherReq.inputLength = buf.size;
@@ -461,7 +461,7 @@ static void hse_cipher_copy_state(void *dst_ctx, void *src_ctx)
 			.length = src->key_len,
 		};
 
-		ret = hse_import_key(key, alg->key_type, dst->key_slot->handle);
+		ret = hse_import_key(key, alg->key_type, dst->key_handle);
 		if (ret != TEE_SUCCESS)
 			return;
 

@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: BSD-3-Clause */
 /*
- * Copyright 2022 NXP
+ * Copyright 2022-2023 NXP
  */
 
 #ifndef HSE_CORE_H
@@ -29,18 +29,6 @@ enum hse_ch_type {
 };
 
 /**
- * struct hse_key - HSE key slot
- * @entry: list position
- * @handle: key handle
- * @type: key type
- */
-struct hse_key {
-	hseKeyHandle_t handle;
-	hseKeyType_t type;
-	bool acquired;
-};
-
-/**
  * struct hse_buf - HSE buffer management struct
  * @data: data buffer
  * @paddr: physical address of the buffer
@@ -60,7 +48,8 @@ TEE_Result hse_srv_req_async(uint8_t channel, const void *srv_desc,
 			     void *ctx,
 			     void (*rx_cbk)(TEE_Result err, void *ctx));
 
-struct hse_key *hse_key_slot_acquire(hseKeyType_t type);
-void hse_key_slot_release(struct hse_key *slot);
+hseKeyHandle_t hse_keyslot_acquire(hseKeyType_t type);
+void hse_keyslot_release(hseKeyHandle_t handle);
+bool hse_keyslot_is_used(hseKeyHandle_t handle);
 
 #endif /* HSE_CORE_H */
