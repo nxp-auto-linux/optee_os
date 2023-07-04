@@ -52,4 +52,15 @@ hseKeyHandle_t hse_keyslot_acquire(hseKeyType_t type);
 void hse_keyslot_release(hseKeyHandle_t handle);
 bool hse_keyslot_is_used(hseKeyHandle_t handle);
 
+TEE_Result hse_import_key(hseKeyHandle_t handle, hseKeyInfo_t *key_info,
+			  struct hse_buf *key0, struct hse_buf *key1,
+			  struct hse_buf *key2);
+TEE_Result hse_acquire_and_import_key(hseKeyHandle_t *handle,
+				      hseKeyInfo_t *key_info,
+				      struct hse_buf *key0,
+				      struct hse_buf *key1,
+				      struct hse_buf *key2);
+void hse_erase_key(hseKeyHandle_t handle);
+void hse_release_and_erase_key(hseKeyHandle_t handle);
+
 #endif /* HSE_CORE_H */

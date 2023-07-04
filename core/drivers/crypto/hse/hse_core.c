@@ -209,12 +209,12 @@ TEE_Result hse_srv_req_sync(uint8_t channel, const void *srv_desc)
 	ret = hse_mu_msg_recv(mu, channel, &srv_rsp);
 	if (ret != TEE_SUCCESS)
 		goto out;
-	
+
 	ret = hse_err_decode(srv_rsp);
 
 out:
 	drv->channel_busy[channel] = false;
-	return ret;	
+	return ret;
 }
 
 /**
@@ -620,6 +620,187 @@ static TEE_Result hse_keygroups_init(void)
 free_keygroups:
 	hse_keygroups_destroy();
 	return err;
+}
+
+/**
+ * hse_check_keylen - checks the lengths of hse_buf buffers so that they would
+ *                    fit in an uint16_t (the size of keylen for an import key
+ *                    request)
+ * @key0: hse_buf buffer for first key
+ * @key1: hse_buf buffer for second key
+ * @key2: hse_buf buffer for third key
+ *
+ * Return: TEE_SUCCESS if lenghts of the keys are smaller than UINT16_MAX,
+ *         TEE_ERROR_BAD_PARAMETERS otherwise
+ */
+static inline TEE_Result hse_check_keylen(struct hse_buf *key0,
+					  struct hse_buf *key1,
+					  struct hse_buf *key2)
+{
+	if ((key0 && key0->size > UINT16_MAX) ||
+	    (key1 && key1->size > UINT16_MAX) ||
+	    (key2 && key2->size > UINT16_MAX))
+		return TEE_ERROR_BAD_PARAMETERS;
+
+	return TEE_SUCCESS;
+}
+
+/**
+ * hse_fill_key - fills the key fields of an HSE Import Key request
+ *                with the physical address and key length of a hse_buf;
+ *                in case of a NULL pointer to a hse_buf struct, it fills
+ *                the fields with zeros.
+ * @key_buf: pointer to a struct hse_buf
+ * @key_paddr: pointer to the paddr field of a key (part of import key request)
+ * @key_len: pointer to the length field of a key (part of import key request)
+ */
+static inline void hse_fill_key(struct hse_buf *key_buf, paddr_t *key_paddr,
+				uint16_t *key_len)
+{
+	if (key_buf) {
+		*key_paddr = key_buf->paddr;
+		*key_len = key_buf->size;
+		cache_operation(TEE_CACHEFLUSH, key_buf->data, key_buf->size);
+	} else {
+		*key_paddr = 0;
+		*key_len = 0;
+	}
+}
+
+/**
+ * hse_import_key - imports a key into the slot pointed to by the handle;
+ *                  the key* arguments which are not in use for the type of key
+ *                  that is imported must be set to NULL;
+ * @handle: the key handle of a slot
+ * @key_info: pointer to hseKeyInfo; will be put in the key import request
+ * @key0: RSA public modulus n / ECC Curve keys / DH prime modulus p
+ * @key1: RSA public exponent / Classic DH public key
+ * @key2: RSA private exponent d / ECC/ED25519 private scalar (big-endian) /
+ *	  symmetric key (e.g AES, HMAC) / Classic DH private key
+ *
+ * Return: TEE_SUCCESS if the key was successfully imported.
+ *         TEE_ERROR_* in case of error.
+ */
+TEE_Result hse_import_key(hseKeyHandle_t handle, hseKeyInfo_t *key_info,
+			  struct hse_buf *key0, struct hse_buf *key1,
+			  struct hse_buf *key2)
+{
+	HSE_SRV_INIT(hseSrvDescriptor_t, srv_desc);
+	HSE_SRV_INIT(hseImportKeySrv_t, import_key_req);
+	TEE_Result ret;
+	struct hse_buf keyinfo_buf;
+
+	if (handle == HSE_INVALID_KEY_HANDLE || !key_info)
+		return TEE_ERROR_BAD_PARAMETERS;
+
+	ret = hse_check_keylen(key0, key1, key2);
+	if (ret != TEE_SUCCESS)
+		return ret;
+
+	ret = hse_buf_alloc(&keyinfo_buf, sizeof(*key_info));
+	if (ret != TEE_SUCCESS)
+		return ret;
+	memcpy(keyinfo_buf.data, key_info, keyinfo_buf.size);
+	cache_operation(TEE_CACHEFLUSH, keyinfo_buf.data, keyinfo_buf.size);
+
+	import_key_req.targetKeyHandle = handle;
+	import_key_req.pKeyInfo  = keyinfo_buf.paddr;
+
+	hse_fill_key(key0, &import_key_req.pKey[0], &import_key_req.keyLen[0]);
+	hse_fill_key(key1, &import_key_req.pKey[1], &import_key_req.keyLen[1]);
+	hse_fill_key(key2, &import_key_req.pKey[2], &import_key_req.keyLen[2]);
+
+	import_key_req.cipher.cipherKeyHandle = HSE_INVALID_KEY_HANDLE;
+	import_key_req.keyContainer.authKeyHandle = HSE_INVALID_KEY_HANDLE;
+
+	srv_desc.srvId = HSE_SRV_ID_IMPORT_KEY;
+	srv_desc.hseSrv.importKeyReq = import_key_req;
+
+	ret = hse_srv_req_sync(HSE_CHANNEL_ANY, &srv_desc);
+	if (ret != TEE_SUCCESS)
+		DMSG("Key import of type 0x%x failed with err 0x%x",
+		     key_info->keyType, ret);
+
+	hse_buf_free(&keyinfo_buf);
+
+	return ret;
+}
+
+/**
+ * hse_acquire_and_import_key - wrapper over hse_import_key(); besides importing
+ *                              the key it will also acquire a keyslot
+ *                              beforehand
+ *
+ * @handle: pointer to hseKeyHandle_t; the key handle of the acquired slot
+ *          will be stored at this address
+ * @key_info: pointer to hseKeyInfo; will be put in the key import request
+ * @key0: RSA public modulus n / ECC Curve keys / DH prime modulus p
+ * @key1: RSA public exponent / Classic DH public key
+ * @key2: RSA private exponent d / ECC/ED25519 private scalar (big-endian) /
+ *	  symmetric key (e.g AES, HMAC) / Classic DH private key
+ *
+ * Return: TEE_SUCCESS if the key was successfully imported and the key handle
+ *         of the acquired key slot will be stored in *handle.
+ *         TEE_ERROR_* in case of error and *handle is asigned the value
+ *         HSE_INVALID_KEY_HANDLE
+ */
+TEE_Result hse_acquire_and_import_key(hseKeyHandle_t *handle,
+				      hseKeyInfo_t *key_info,
+				      struct hse_buf *key0,
+				      struct hse_buf *key1,
+				      struct hse_buf *key2)
+{
+	TEE_Result ret;
+
+	*handle = hse_keyslot_acquire(key_info->keyType);
+	if (*handle == HSE_INVALID_KEY_HANDLE)
+		return TEE_ERROR_BUSY;
+
+	ret = hse_import_key(*handle, key_info, key0, key1, key2);
+	if (ret != TEE_SUCCESS) {
+		hse_keyslot_release(*handle);
+		*handle = HSE_INVALID_KEY_HANDLE;
+	}
+
+	return ret;
+}
+
+/**
+ * hse_erase_key - in case of a NVM key slot, erases the key from that
+ *                 slot; in case of a RAM key slot, the key does not need to be
+ *                 erased: it will simply be overwritten in the next import.
+ * @handle: the key handle
+ */
+void hse_erase_key(hseKeyHandle_t handle)
+{
+	HSE_SRV_INIT(hseSrvDescriptor_t, srv_desc);
+	TEE_Result ret;
+	hseKeyCatalogId_t catalog_id = GET_CATALOG_ID(handle);
+	hseEraseKeySrv_t *erase_key_req = &srv_desc.hseSrv.eraseKeyReq;
+
+	if (handle == HSE_INVALID_KEY_HANDLE ||
+	    catalog_id != HSE_KEY_CATALOG_ID_NVM)
+		return;
+
+	srv_desc.srvId = HSE_SRV_ID_ERASE_KEY;
+	erase_key_req->keyHandle = handle;
+	erase_key_req->eraseKeyOptions = HSE_ERASE_NOT_USED;
+
+	ret = hse_srv_req_sync(HSE_CHANNEL_ANY, &srv_desc);
+	if (ret != TEE_SUCCESS)
+		DMSG("HSE Erase Key request failed with err 0x%x", ret);
+}
+
+/**
+ * hse_release_and_erase_key - wrapper over hse_erase_key(); besides erasing
+ *                             the key it will also release the keyslot
+ *                             afterward
+ * @handle: the key handle
+ */
+void hse_release_and_erase_key(hseKeyHandle_t handle)
+{
+	hse_erase_key(handle);
+	hse_keyslot_release(handle);
 }
 
 /**

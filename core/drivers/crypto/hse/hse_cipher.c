@@ -41,12 +41,14 @@ struct hse_cipher_tpl {
 /**
  * struct hse_cipher_ctx - container for all the other contexts
  * @alg_tpl: algorithm template pointer
+ * @initialized: the operation has been initialized
  * @iv: initialization vector buffer
  * @key_handle: key handle in the AES Key Group
  * @direction: encrypt or decrypt direction
  */
 struct hse_cipher_ctx {
 	const struct hse_cipher_tpl *alg_tpl;
+	bool initialized;
 	struct hse_buf iv;
 	uint8_t key[AES_KEY_SIZE_256];
 	size_t key_len;
@@ -121,55 +123,50 @@ static const struct hse_cipher_tpl *get_cipheralgo(uint32_t algo)
 	return NULL;
 }
 
-static TEE_Result hse_import_key(struct drvcrypt_buf key, hseKeyType_t key_type,
-				 hseKeyHandle_t key_handle)
+static TEE_Result hse_import_symkey(struct drvcrypt_buf key,
+				    hseKeyType_t key_type,
+				    hseCipherDir_t direction,
+				    hseKeyHandle_t *handle)
 {
-	TEE_Result ret = TEE_SUCCESS;
-	struct hse_buf keybuf, keyinf;
-	hseKeyInfo_t *key_inf_buf;
-	HSE_SRV_INIT(hseSrvDescriptor_t, srv_desc);
-	HSE_SRV_INIT(hseImportKeySrv_t, import_key_req);
+	TEE_Result ret;
+	hseKeyInfo_t key_info = {0};
+	struct hse_buf key_buf;
+	size_t key_bitlen = HSE_BYTES_TO_BITS(key.length);
 
-	ret = hse_buf_alloc(&keybuf, key.length);
+	if (!key.data || !key.length)
+		return TEE_ERROR_BAD_PARAMETERS;
+
+	/* The bit length is stored in an uint16_t field of key_info */
+	if (key_bitlen > UINT16_MAX)
+		return TEE_ERROR_BAD_PARAMETERS;
+
+	ret = hse_buf_alloc(&key_buf, key.length);
 	if (ret != TEE_SUCCESS)
-		goto out;
+		return ret;
+	memcpy(key_buf.data, key.data, key_buf.size);
 
-	memcpy(keybuf.data, key.data, key.length);
+	key_info.keyFlags = (direction == HSE_CIPHER_DIR_ENCRYPT) ?
+			    HSE_KF_USAGE_ENCRYPT : HSE_KF_USAGE_DECRYPT;
+	key_info.keyBitLen = key_bitlen;
+	key_info.keyType = key_type;
 
-	ret = hse_buf_alloc(&keyinf, sizeof(hseKeyInfo_t));
-	if (ret != TEE_SUCCESS)
-		goto out_free_keybuf;
-	memset(keyinf.data, 0, keyinf.size);
+	ret = hse_acquire_and_import_key(handle, &key_info, NULL, NULL,
+					 &key_buf);
 
-	key_inf_buf = (hseKeyInfo_t *)((void *)keyinf.data);
-	key_inf_buf->keyFlags = HSE_KF_USAGE_ENCRYPT | HSE_KF_USAGE_DECRYPT;
-	key_inf_buf->keyBitLen = keybuf.size * 8;
-	key_inf_buf->keyType = key_type;
-	key_inf_buf->smrFlags = 0;
+	hse_buf_free(&key_buf);
 
-	srv_desc.srvId = HSE_SRV_ID_IMPORT_KEY;
-	import_key_req.targetKeyHandle = key_handle;
-	import_key_req.pKeyInfo = keyinf.paddr;
-	import_key_req.pKey[2] = keybuf.paddr;
-	import_key_req.keyLen[2] = keybuf.size;
-	import_key_req.cipher.cipherKeyHandle = HSE_INVALID_KEY_HANDLE;
-	import_key_req.keyContainer.authKeyHandle = HSE_INVALID_KEY_HANDLE;
-
-	srv_desc.hseSrv.importKeyReq = import_key_req;
-
-	cache_operation(TEE_CACHEFLUSH, keybuf.data, keybuf.size);
-	cache_operation(TEE_CACHEFLUSH, keyinf.data, keyinf.size);
-
-	ret = hse_srv_req_sync(HSE_CHANNEL_ANY, &srv_desc);
-
-	hse_buf_free(&keyinf);
-
-out_free_keybuf:
-	hse_buf_free(&keybuf);
-out:
-	if (ret != TEE_SUCCESS)
-		DMSG("HSE Import Key request failed with err 0x%x", ret);
 	return ret;
+}
+
+static void hse_cipher_reset(struct hse_cipher_ctx *ctx)
+{
+	if (!ctx || !ctx->initialized)
+		return;
+
+	hse_release_and_erase_key(ctx->key_handle);
+	ctx->key_handle = HSE_INVALID_KEY_HANDLE;
+	ctx->prev_size = 0;
+	ctx->initialized = false;
 }
 
 /**
@@ -186,7 +183,7 @@ static void hse_cipher_free_ctx(void *ctx)
 		return;
 
 	hse_buf_free(&hse_ctx->iv);
-	hse_keyslot_release(hse_ctx->key_handle);
+	hse_release_and_erase_key(hse_ctx->key_handle);
 
 	free(hse_ctx);
 }
@@ -225,18 +222,13 @@ static TEE_Result hse_cipher_alloc_ctx(void **ctx, uint32_t algo)
 			goto out_free_ctx;
 	}
 
-	hse_ctx->key_handle = hse_keyslot_acquire(alg_tpl->key_type);
-	if (!hse_ctx->key_handle) {
-		ret = TEE_ERROR_BUSY;
-		goto out_free_iv;
-	}
+	hse_ctx->key_handle = HSE_INVALID_KEY_HANDLE;
 
 	*ctx = hse_ctx;
 
 	DMSG("Allocated context for algo %s", alg_tpl->cipher_name);
 	return ret;
 
-out_free_iv:
 	hse_buf_free(&hse_ctx->iv);
 out_free_ctx:
 	free(hse_ctx);
@@ -257,7 +249,10 @@ static TEE_Result hse_cipher_init(struct drvcrypt_cipher_init *dinit)
 	TEE_Result ret = TEE_SUCCESS;
 	struct hse_cipher_ctx *ctx = dinit->ctx;
 	const struct hse_cipher_tpl *alg = ctx->alg_tpl;
-	hseKeyHandle_t key_handle = ctx->key_handle;
+	hseKeyHandle_t *key_handle = &ctx->key_handle;
+
+	if (ctx->initialized)
+		hse_cipher_reset(ctx);
 
 	if (!dinit->key1.data || !dinit->key1.length) {
 		ret = TEE_ERROR_BAD_PARAMETERS;
@@ -271,15 +266,18 @@ static TEE_Result hse_cipher_init(struct drvcrypt_cipher_init *dinit)
 	ctx->key_len = dinit->key1.length;
 	memcpy(ctx->key, dinit->key1.data, dinit->key1.length);
 
-	ret = hse_import_key(dinit->key1, alg->key_type, key_handle);
-	if (ret != TEE_SUCCESS)
-		goto out;
-
 	ctx->direction = dinit->encrypt ? HSE_CIPHER_DIR_ENCRYPT :
 					  HSE_CIPHER_DIR_DECRYPT;
 
+	ret = hse_import_symkey(dinit->key1, alg->key_type, ctx->direction,
+				key_handle);
+	if (ret != TEE_SUCCESS)
+		goto out;
+
 	if (dinit->iv.data && dinit->iv.length == alg->ivsize)
 		memcpy(ctx->iv.data, dinit->iv.data, dinit->iv.length);
+
+	ctx->initialized = true;
 
 out:
 	if (ret != TEE_SUCCESS) {
@@ -445,6 +443,7 @@ static void hse_cipher_copy_state(void *dst_ctx, void *src_ctx)
 	TEE_Result ret;
 	struct hse_cipher_ctx *src, *dst;
 	const struct hse_cipher_tpl *alg;
+	struct drvcrypt_buf key;
 
 	if (!src_ctx || !dst_ctx)
 		return;
@@ -453,21 +452,21 @@ static void hse_cipher_copy_state(void *dst_ctx, void *src_ctx)
 	dst = dst_ctx;
 	alg = src->alg_tpl;
 
+	if (!src->initialized)
+		return;
+
 	dst->direction = src->direction;
 
-	if (src->key_len) {
-		struct drvcrypt_buf key = {
-			.data = src->key,
-			.length = src->key_len,
-		};
+	key.data = src->key;
+	key.length = src->key_len;
 
-		ret = hse_import_key(key, alg->key_type, dst->key_handle);
-		if (ret != TEE_SUCCESS)
-			return;
+	ret = hse_import_symkey(key, alg->key_type, dst->direction,
+				&dst->key_handle);
+	if (ret != TEE_SUCCESS)
+		return;
 
-		memcpy(dst->key, src->key, src->key_len);
-		dst->key_len = src->key_len;
-	}
+	memcpy(dst->key, src->key, src->key_len);
+	dst->key_len = src->key_len;
 
 	memcpy(dst->prev_data, src->prev_data, src->prev_size);
 	dst->prev_size = src->prev_size;

@@ -101,56 +101,27 @@ free_publickey:
 
 static TEE_Result hse_import_rsakey(struct hse_buf e, struct hse_buf n,
 				    struct hse_buf d,
-				    hseKeyHandle_t key_handle,
+				    hseKeyHandle_t *key_handle,
 				    hseKeyFlags_t key_flags,
 				    hseKeyType_t key_type)
 {
-	HSE_SRV_INIT(hseImportKeySrv_t, import_key_req);
-	HSE_SRV_INIT(hseSrvDescriptor_t, srv_desc);
-	TEE_Result ret = TEE_SUCCESS;
-	struct hse_buf keyinf;
-	hseKeyInfo_t *key_inf_buf;
+	hseKeyInfo_t key_info = {0};
+	size_t n_bitlen = HSE_BYTES_TO_BITS(n.size);
 
-	ret = hse_buf_alloc(&keyinf, sizeof(hseKeyInfo_t));
-	if (ret != TEE_SUCCESS)
-		goto out;
-	memset(keyinf.data, 0, keyinf.size);
+	/* The bit length is stored in an uint16_t field of key_info */
+	if (n_bitlen > UINT16_MAX)
+		return TEE_ERROR_BAD_PARAMETERS;
 
-	key_inf_buf = (hseKeyInfo_t *)((void *)keyinf.data);
-	key_inf_buf->keyFlags = key_flags;
-	key_inf_buf->keyBitLen = n.size * 8;
-	key_inf_buf->keyType = key_type;
-	key_inf_buf->smrFlags = 0;
-	key_inf_buf->specific.pubExponentSize = e.size;
+	key_info.keyFlags = key_flags;
+	key_info.keyBitLen = n_bitlen;
+	key_info.keyType = key_type;
+	key_info.specific.pubExponentSize = e.size;
 
-	srv_desc.srvId = HSE_SRV_ID_IMPORT_KEY;
-	import_key_req.targetKeyHandle = key_handle;
-	import_key_req.pKeyInfo = keyinf.paddr;
-	import_key_req.pKey[0] = n.paddr;
-	import_key_req.pKey[1] = e.paddr;
-	import_key_req.pKey[2] = d.paddr;
-	import_key_req.keyLen[0] = n.size;
-	import_key_req.keyLen[1] = e.size;
-	import_key_req.keyLen[2] = d.size;
-	import_key_req.cipher.cipherKeyHandle = HSE_INVALID_KEY_HANDLE;
-	import_key_req.keyContainer.authKeyHandle = HSE_INVALID_KEY_HANDLE;
-
-	srv_desc.hseSrv.importKeyReq = import_key_req;
-
-	cache_operation(TEE_CACHEFLUSH, e.data, e.size);
-	cache_operation(TEE_CACHEFLUSH, n.data, n.size);
-	cache_operation(TEE_CACHEFLUSH, d.data, d.size);
-	cache_operation(TEE_CACHEFLUSH, keyinf.data, keyinf.size);
-
-	ret = hse_srv_req_sync(HSE_CHANNEL_ANY, &srv_desc);
-
-	hse_buf_free(&keyinf);
-out:
-	return ret;
+	return hse_acquire_and_import_key(key_handle, &key_info, &n, &e, &d);
 }
 
 static TEE_Result hse_import_keypair(struct rsa_keypair *key,
-				     hseKeyHandle_t key_handle,
+				     hseKeyHandle_t *key_handle,
 				     hseKeyFlags_t flag)
 {
 	TEE_Result ret = TEE_SUCCESS;
@@ -211,7 +182,7 @@ out:
 }
 
 static TEE_Result hse_import_pubkey(struct rsa_public_key *key,
-				    hseKeyHandle_t key_handle,
+				    hseKeyHandle_t *key_handle,
 				    hseKeyFlags_t flag)
 {
 	TEE_Result ret = TEE_SUCCESS;
@@ -259,20 +230,6 @@ out:
 	if (ret != TEE_SUCCESS)
 		DMSG("HSE RSA Public Key request failed with err 0x%x", ret);
 	return ret;
-}
-
-static void hse_erase_rsakey(hseKeyHandle_t key_handle)
-{
-	HSE_SRV_INIT(hseSrvDescriptor_t, srv_desc);
-	TEE_Result res;
-
-	srv_desc.srvId = HSE_SRV_ID_ERASE_KEY;
-	srv_desc.hseSrv.eraseKeyReq.keyHandle = key_handle;
-	srv_desc.hseSrv.eraseKeyReq.eraseKeyOptions = HSE_ERASE_NOT_USED;
-
-	res = hse_srv_req_sync(HSE_CHANNEL_ANY, &srv_desc);
-	if (res != TEE_SUCCESS)
-		DMSG("HSE Erase Key request failed with err 0x%x", res);
 }
 
 static uint8_t get_hse_hash_algo(uint32_t hash_algo)
@@ -361,8 +318,7 @@ static TEE_Result hse_rsa_enc_req(struct drvcrypt_rsa_ed *rsa_data,
 	HSE_SRV_INIT(hseRsaCipherScheme_t, cipher_sch);
 	TEE_Result res;
 	struct hse_buf label, hse_in, hse_out, hse_out_len;
-	hseKeyType_t key_type;
-	hseKeyHandle_t key_handle;
+	hseKeyHandle_t key_handle = HSE_INVALID_KEY_HANDLE;
 	size_t n_len;
 	struct drvcrypt_buf *in_buf, *out_buf;
 	uint32_t off = 0, out_len;
@@ -371,23 +327,14 @@ static TEE_Result hse_rsa_enc_req(struct drvcrypt_rsa_ed *rsa_data,
 	if (res != TEE_SUCCESS)
 		goto out;
 
-	key_type = (direction == HSE_CIPHER_DIR_ENCRYPT) ?
-		   HSE_KEY_TYPE_RSA_PUB : HSE_KEY_TYPE_RSA_PAIR;
-
-	key_handle = hse_keyslot_acquire(key_type);
-	if (key_handle == HSE_INVALID_KEY_HANDLE) {
-		res = TEE_ERROR_BUSY;
-		goto out_free_label;
-	}
-
 	res = (direction == HSE_CIPHER_DIR_ENCRYPT) ?
-	hse_import_pubkey(rsa_data->key.key, key_handle,
+	hse_import_pubkey(rsa_data->key.key, &key_handle,
 			  HSE_KF_USAGE_ENCRYPT) :
-	hse_import_keypair(rsa_data->key.key, key_handle,
+	hse_import_keypair(rsa_data->key.key, &key_handle,
 			   HSE_KF_USAGE_DECRYPT);
 
 	if (res != TEE_SUCCESS)
-		goto out_free_keyslot;
+		goto out_free_label;
 
 	if (direction == HSE_CIPHER_DIR_ENCRYPT) {
 		in_buf = &rsa_data->message;
@@ -410,7 +357,7 @@ static TEE_Result hse_rsa_enc_req(struct drvcrypt_rsa_ed *rsa_data,
 
 	res = hse_buf_alloc(&hse_in, in_buf->length);
 	if (res != TEE_SUCCESS)
-		goto out_free_keyslot;
+		goto out_erase_key;
 
 	memcpy(hse_in.data, in_buf->data, in_buf->length);
 	cache_operation(TEE_CACHEFLUSH, hse_in.data, hse_in.size);
@@ -464,9 +411,8 @@ out_free_output:
 	hse_buf_free(&hse_out);
 out_free_input:
 	hse_buf_free(&hse_in);
-out_free_keyslot:
-	hse_erase_rsakey(key_handle);
-	hse_keyslot_release(key_handle);
+out_erase_key:
+	hse_release_and_erase_key(key_handle);
 out_free_label:
 	hse_buf_free(&label);
 out:
@@ -552,7 +498,6 @@ static TEE_Result hse_rsa_sign_req(struct drvcrypt_rsa_ssa *ssa_data,
 	HSE_SRV_INIT(hseSrvDescriptor_t, srv_desc);
 	HSE_SRV_INIT(hseSignScheme_t, sign_scheme);
 	TEE_Result res = TEE_SUCCESS;
-	hseKeyType_t key_type;
 	hseKeyHandle_t key_handle;
 	struct hse_buf message, sign_len, signature;
 
@@ -560,23 +505,14 @@ static TEE_Result hse_rsa_sign_req(struct drvcrypt_rsa_ssa *ssa_data,
 	if (res != TEE_SUCCESS)
 		goto out;
 
-	key_type = (direction == HSE_AUTH_DIR_GENERATE) ?
-		   HSE_KEY_TYPE_RSA_PAIR : HSE_KEY_TYPE_RSA_PUB;
-
-	key_handle = hse_keyslot_acquire(key_type);
-	if (key_handle == HSE_INVALID_KEY_HANDLE) {
-		res = TEE_ERROR_BUSY;
-		goto out;
-	}
-
 	res = (direction == HSE_AUTH_DIR_GENERATE) ?
-	hse_import_keypair(ssa_data->key.key, key_handle,
+	hse_import_keypair(ssa_data->key.key, &key_handle,
 			   HSE_KF_USAGE_SIGN) :
-	hse_import_pubkey(ssa_data->key.key, key_handle,
+	hse_import_pubkey(ssa_data->key.key, &key_handle,
 			  HSE_KF_USAGE_VERIFY);
 
 	if (res != TEE_SUCCESS)
-		goto out_free_keyslot;
+		goto out;
 
 	if (ssa_data->signature.length > UINT32_MAX ||
 	    ssa_data->message.length > UINT32_MAX) {
@@ -639,9 +575,7 @@ out_free_sign:
 out_free_message:
 	hse_buf_free(&message);
 out_erase_key:
-	hse_erase_rsakey(key_handle);
-out_free_keyslot:
-	hse_keyslot_release(key_handle);
+	hse_release_and_erase_key(key_handle);
 out:
 	if (res != TEE_SUCCESS)
 		DMSG("HSE RSA sign request failed with err 0x%x", res);
