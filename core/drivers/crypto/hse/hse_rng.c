@@ -2,7 +2,7 @@
 /*
  * NXP HSE Driver - Hardware True Random Number Generator Support
  *
- * Copyright 2022 NXP
+ * Copyright 2022-2023 NXP
  */
 
 #include <crypto/crypto.h>
@@ -135,6 +135,9 @@ static TEE_Result hse_rng_read(void *buf, size_t blen)
 	struct hse_buf cache = rng_ctx.cache;
 	unsigned int *cache_idx = &rng_ctx.cache_idx;
 	uint32_t exceptions;
+
+	if (!is_hse_status_ok())
+		return TEE_ERROR_ACCESS_DENIED;
 
 	exceptions = cpu_spin_lock_xsave(&rng_ctx.req_lock);
 

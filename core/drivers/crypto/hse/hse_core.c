@@ -622,6 +622,15 @@ static TEE_Result hse_check_fw_version(void)
 	return TEE_SUCCESS;
 }
 
+/**
+ * is_hse_status_ok() - check if HSE
+ * has been successfully initialised
+ */
+bool is_hse_status_ok(void)
+{
+	return (hse_mu_check_status(drv->mu) & HSE_STATUS_INIT_OK);
+}
+
 static TEE_Result crypto_driver_init(void)
 {
 	TEE_Result err;
