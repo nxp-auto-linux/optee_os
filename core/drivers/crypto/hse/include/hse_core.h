@@ -43,6 +43,8 @@ struct hse_buf {
 TEE_Result hse_buf_alloc(struct hse_buf *buf, size_t size);
 void hse_buf_free(struct hse_buf *buf);
 
+bool is_hse_status_ok(void);
+
 TEE_Result hse_srv_req_sync(uint8_t channel, const void *srv_desc);
 TEE_Result hse_srv_req_async(uint8_t channel, const void *srv_desc,
 			     void *ctx,
