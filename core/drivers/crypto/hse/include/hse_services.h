@@ -11,6 +11,9 @@
 /* Cipher Services */
 TEE_Result hse_cipher_register(void);
 
+/* Hash Services */
+TEE_Result hse_hash_register(void);
+
 /* RSA Service */
 TEE_Result hse_rsa_register(void);
 
