@@ -87,6 +87,14 @@ endif
 
 $(call force,CFG_NXP_HSE,y)
 
+HSE_FWTYPE_STR=$(shell grep -r '\#define HSE_FWTYPE' $(HSE_FWDIR)/interface/config/hse_target.h \
+		| sed 's/.*\(PREMIUM\|STANDARD\).*/\1/')
+ifeq ($(HSE_FWTYPE_STR), PREMIUM)
+$(call force,CFG_HSE_PREMIUM_FW,1)
+else
+$(call force,CFG_HSE_PREMIUM_FW,0)
+endif
+
 # RAM Catalog Keys
 CFG_HSE_HMAC_KEY_GROUP_ID ?= 1
 CFG_HSE_HMAC_KEY_GROUP_SIZE ?= 6
