@@ -319,7 +319,6 @@ static TEE_Result hse_rsa_enc_req(struct drvcrypt_rsa_ed *rsa_data,
 	TEE_Result res;
 	struct hse_buf label, hse_in, hse_out, hse_out_len;
 	hseKeyHandle_t key_handle = HSE_INVALID_KEY_HANDLE;
-	size_t n_len;
 	struct drvcrypt_buf *in_buf, *out_buf;
 	uint32_t off = 0, out_len;
 
@@ -343,16 +342,6 @@ static TEE_Result hse_rsa_enc_req(struct drvcrypt_rsa_ed *rsa_data,
 	} else {
 		in_buf = &rsa_data->cipher;
 		out_buf = &rsa_data->message;
-
-		/*
-		 * In case of decryption, the cipher text should be the length
-		 * of the modulus. Some buffers may be over-allocated.
-		 */
-		n_len = crypto_bignum_num_bytes(((struct rsa_keypair *)
-						 (rsa_data->key.key))->n);
-
-		if (in_buf->length != n_len)
-			in_buf->length = n_len;
 	}
 
 	res = hse_buf_alloc(&hse_in, in_buf->length);
