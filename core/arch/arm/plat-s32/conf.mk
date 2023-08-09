@@ -112,6 +112,8 @@ CFG_CRYPTO_DRV_RSA=y
 # HSE is using only standard PKCS #1 encoding with ASN.1
 CFG_CRYPTO_RSASSA_NA1=n
 
+CFG_CRYPTO_DRV_MAC=y
+
 $(call force,CFG_WITH_SOFTWARE_PRNG,n)
 
 CFG_HSE_KP_PTA ?= y

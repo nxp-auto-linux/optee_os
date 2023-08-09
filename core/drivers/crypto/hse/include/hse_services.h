@@ -14,6 +14,9 @@ TEE_Result hse_cipher_register(void);
 /* RSA Service */
 TEE_Result hse_rsa_register(void);
 
+/* MAC Service*/
+TEE_Result hse_mac_register(void);
+
 /* HUK Services */
 TEE_Result hse_retrieve_huk(void);
 

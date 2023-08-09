@@ -1064,6 +1064,12 @@ static TEE_Result crypto_driver_init(void)
 		goto out_free_keygroups;
 	}
 
+	err = hse_mac_register();
+	if (err != TEE_SUCCESS) {
+		EMSG("HSE MAC register failed with err 0x%x", err);
+		goto out_free_keygroups;
+	}
+
 	err = hse_retrieve_huk();
 	if (err != TEE_SUCCESS)
 		IMSG("HSE HUK could not be retrieved. Using default HUK");
