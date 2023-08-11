@@ -63,4 +63,8 @@ TEE_Result hse_acquire_and_import_key(hseKeyHandle_t *handle,
 void hse_erase_key(hseKeyHandle_t handle);
 void hse_release_and_erase_key(hseKeyHandle_t handle);
 
+TEE_Result hse_stream_channel_acquire(uint8_t *channel, uint8_t *stream_id);
+void hse_stream_channel_release(uint8_t stream_id);
+TEE_Result hse_stream_ctx_copy(uint8_t src_stream, uint8_t dst_stream);
+
 #endif /* HSE_CORE_H */

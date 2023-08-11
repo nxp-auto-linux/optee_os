@@ -72,6 +72,8 @@ struct hse_drvdata {
 	enum hse_ch_type type[HSE_NUM_OF_CHANNELS_PER_MU];
 	SLIST_HEAD(, hse_keygroup) keygroup_list;
 	unsigned int tx_lock;
+	bool stream_busy[HSE_STREAM_COUNT];
+	unsigned int stream_lock;
 	struct {
 		void (*fn)(TEE_Result err, void *ctx);
 		void *ctx;
@@ -838,6 +840,118 @@ static inline void hse_config_channels(void)
 }
 
 /**
+ * hse_stream_channel_acquire - acquires a channel which will be used for
+ *                              streaming mode operations
+ * @channel: used when transmitting the service request [out]
+ * @stream_id: id of the stream (up to HSE_STREAM_COUNT); must be used only
+ *             with the associated channel [out]
+ *
+ * Return: TEE_SUCCESS, on success
+ *         TEE_ERROR_BAD_PARAMETERS, if the parameters are invalid
+ *         TEE_ERROR_BUSY, if there is no stream channel avaialable
+ */
+TEE_Result hse_stream_channel_acquire(uint8_t *channel, uint8_t *stream_id)
+{
+	uint32_t exceptions;
+	size_t i;
+
+	if (!channel || !stream_id)
+		return TEE_ERROR_BAD_PARAMETERS;
+
+	*channel = HSE_CHANNEL_INV;
+
+	exceptions = cpu_spin_lock_xsave(&drv->stream_lock);
+
+	for (i = 0; i < HSE_STREAM_COUNT; i++)
+		if (!drv->stream_busy[i]) {
+			drv->stream_busy[i] = true;
+			break;
+		}
+
+	cpu_spin_unlock_xrestore(&drv->stream_lock, exceptions);
+
+	if (i >= HSE_STREAM_COUNT)
+		return TEE_ERROR_BUSY;
+
+	*stream_id = i;
+	*channel = HSE_NUM_OF_CHANNELS_PER_MU - HSE_STREAM_COUNT + i;
+
+	return TEE_SUCCESS;
+}
+
+/**
+ * hse_stream_channel_release - releases a previously acquired stream channel
+ * @stream_id: if of the acquired stream
+ */
+void hse_stream_channel_release(uint8_t stream_id)
+{
+	uint32_t exceptions;
+
+	if (stream_id >= HSE_STREAM_COUNT)
+		return;
+
+	exceptions = cpu_spin_lock_xsave(&drv->stream_lock);
+
+	assert(drv->stream_busy[stream_id]);
+	drv->stream_busy[stream_id] = false;
+
+	cpu_spin_unlock_xrestore(&drv->stream_lock, exceptions);
+}
+
+/**
+ * hse_stream_ctx_copy - copies the streaming context from a source stream
+ *                       to a destination stream; both streams must have been
+ *                       acquiered previous to this operation
+ * @src_stream: source stream
+ * @dst_stream: destination stream
+ *
+ * Return: TEE_SUCCESS, on success
+ *         TEE_ERROR_BAD_PARAMETERS, if the parameters are invalid
+ *         other errors, depending on the service request outcome
+ */
+TEE_Result hse_stream_ctx_copy(uint8_t src_stream, uint8_t dst_stream)
+{
+	HSE_SRV_INIT(hseSrvDescriptor_t, srv_desc);
+	hseImportExportStreamCtxSrv_t *stream_srv =
+		&srv_desc.hseSrv.importExportStreamCtx;
+	struct hse_buf io_buf;
+	TEE_Result ret;
+
+	if (src_stream >= HSE_STREAM_COUNT || dst_stream >= HSE_STREAM_COUNT)
+		return TEE_ERROR_BAD_PARAMETERS;
+
+	if (!drv->stream_busy[src_stream] || !drv->stream_busy[dst_stream])
+		return TEE_ERROR_BAD_PARAMETERS;
+
+	ret = hse_buf_alloc(&io_buf, MAX_STREAMING_CONTEXT_SIZE);
+	if (ret != TEE_SUCCESS)
+		return ret;
+
+	/* Export the context from the source stream in the buffer */
+	srv_desc.srvId = HSE_SRV_ID_IMPORT_EXPORT_STREAM_CTX;
+	stream_srv->pStreamContext = io_buf.paddr;
+	stream_srv->operation = HSE_EXPORT_STREAMING_CONTEXT;
+	stream_srv->streamId = src_stream;
+
+	ret = hse_srv_req_sync(HSE_CHANNEL_ADM, &srv_desc);
+	if (ret != TEE_SUCCESS)
+		goto out;
+
+	/* Import the context in the destination stream from the buffer */
+	stream_srv->operation = HSE_IMPORT_STREAMING_CONTEXT;
+	stream_srv->streamId = dst_stream;
+
+	ret = hse_srv_req_sync(HSE_CHANNEL_ADM, &srv_desc);
+
+out:
+	hse_buf_free(&io_buf);
+
+	if (ret != TEE_SUCCESS)
+		EMSG("Stream Context Copy failed with err 0x%x", ret);
+	return ret;
+}
+
+/**
  * hse_check_fw_version - retrieve firmware version
  *
  * Issues a service request for retrieving the HSE Firmware version
@@ -904,6 +1018,7 @@ static TEE_Result crypto_driver_init(void)
 	hse_config_channels();
 
 	drv->tx_lock = SPINLOCK_UNLOCK;
+	drv->stream_lock = SPINLOCK_UNLOCK;
 
 	err = hse_check_fw_version();
 	if (err != TEE_SUCCESS)
