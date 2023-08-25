@@ -280,25 +280,6 @@ out:
 }
 
 /**
- * hse_ctr_inc - in counter mode, each time a block is encrypted/decrypted,
- *               the iv is incremented by 1
- * @iv: iv
- * @blks: number of blocks that have been encrypted/decrypted during the
- *        update operation
- * @blocksize: size of the block -- 16 for AES-CTR. The iv has the size
- *             of the block size.
- */
-static inline void hse_ctr_inc(uint8_t *iv, size_t blks, size_t blocksize)
-{
-	for (; blks > 0; blks--)
-		for (int64_t i = blocksize - 1; i >= 0; i--) {
-			iv[i] = (iv[i] + 1) & 0xff;
-			if (iv[i])
-				break;
-		}
-}
-
-/**
  * hse_cipher_update - performs an encrypt/decrypt transformation
  *		       on the given data
  *

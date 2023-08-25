@@ -47,6 +47,7 @@ paddr_t hse_buf_get_paddr(struct hse_buf *buf);
 
 bool is_hse_status_ok(void);
 
+void hse_ctr_inc(uint8_t *iv, size_t blks, size_t blocksize);
 TEE_Result hse_srv_req_sync(uint8_t channel, const void *srv_desc);
 TEE_Result hse_srv_req_async(uint8_t channel, const void *srv_desc,
 			     void *ctx,

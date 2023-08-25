@@ -12,6 +12,7 @@ srcs-y += hse_dt.c
 srcs-y += hse_mu.c
 srcs-y += hse_core.c
 srcs-y += hse_util.c
+srcs-$(CFG_NXP_HSE_AUTHENC_DRV) += hse_auth.c
 srcs-$(CFG_NXP_HSE_CIPHER_DRV) += hse_cipher.c
 srcs-$(CFG_NXP_HSE_HASH_DRV) += hse_hash.c
 srcs-$(CFG_NXP_HSE_HUK_DRV) += hse_huk.c

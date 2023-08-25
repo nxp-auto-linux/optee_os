@@ -582,7 +582,8 @@ static TEE_Result hse_keygroups_init(void)
 	TEE_Result err;
 
 	if (IS_ENABLED(CFG_NXP_HSE_CIPHER_DRV) ||
-	    IS_ENABLED(CFG_NXP_HSE_MAC_DRV)) {
+	    IS_ENABLED(CFG_NXP_HSE_MAC_DRV) ||
+		IS_ENABLED(CFG_NXP_HSE_AUTHENC_DRV)) {
 		err =  hse_keygroup_alloc(HSE_KEY_TYPE_AES,
 					  CFG_NXP_HSE_AES_KEYGROUP_CTLG,
 					  CFG_NXP_HSE_AES_KEYGROUP_ID,
@@ -1076,6 +1077,14 @@ static TEE_Result crypto_driver_init(void)
 		err = hse_hash_register();
 		if (err != TEE_SUCCESS) {
 			EMSG("HSE Hash register failed with err 0x%x", err);
+			goto out_err;
+		}
+	}
+
+	if (IS_ENABLED(CFG_NXP_HSE_AUTHENC_DRV)) {
+		err = hse_authenc_register();
+		if (err != TEE_SUCCESS) {
+			EMSG("HSE Authenc register failed with err 0x%x", err);
 			goto out_err;
 		}
 	}
