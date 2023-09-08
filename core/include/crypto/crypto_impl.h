@@ -2,6 +2,7 @@
 /*
  * Copyright (c) 2019, Linaro Limited
  * Copyright (c) 2021, SumUp Services GmbH
+ * Copyright 2023 NXP
  */
 
 #ifndef __CRYPTO_CRYPTO_IMPL_H
@@ -249,15 +250,15 @@ struct crypto_authenc_ops {
 	TEE_Result (*update_payload)(struct crypto_authenc_ctx *ctx,
 				     TEE_OperationMode mode,
 				     const uint8_t *src_data, size_t len,
-				     uint8_t *dst_data);
+				     uint8_t *dst_data, size_t *dst_len);
 	TEE_Result (*enc_final)(struct crypto_authenc_ctx *ctx,
 				const uint8_t *src_data, size_t len,
-				uint8_t *dst_data, uint8_t *dst_tag,
-				size_t *dst_tag_len);
+				uint8_t *dst_data, size_t *dst_len,
+				uint8_t *dst_tag, size_t *dst_tag_len);
 	TEE_Result (*dec_final)(struct crypto_authenc_ctx *ctx,
 				const uint8_t *src_data, size_t len,
-				uint8_t *dst_data, const uint8_t *tag,
-				size_t tag_len);
+				uint8_t *dst_data, size_t *dst_len,
+				const uint8_t *tag, size_t tag_len);
 	void (*final)(struct crypto_authenc_ctx *ctx);
 	void (*free_ctx)(struct crypto_authenc_ctx *ctx);
 	void (*copy_state)(struct crypto_authenc_ctx *dst_ctx,

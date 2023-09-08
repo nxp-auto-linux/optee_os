@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: BSD-2-Clause
 /*
  * Copyright (c) 2017-2020, Linaro Limited
+ * Copyright 2023 NXP
  */
 
 #include <assert.h>
@@ -478,25 +479,29 @@ static TEE_Result aes_gcm_update_aad(struct crypto_authenc_ctx *aec,
 static TEE_Result aes_gcm_update_payload(struct crypto_authenc_ctx *aec,
 					 TEE_OperationMode m,
 					 const uint8_t *src, size_t len,
-					 uint8_t *dst)
+					 uint8_t *dst, size_t *dst_len)
 {
+	*dst_len = len;
 	return internal_aes_gcm_update_payload(&to_aes_gcm_ctx(aec)->ctx,
 					       m, src, len, dst);
 }
 
 static TEE_Result aes_gcm_enc_final(struct crypto_authenc_ctx *aec,
 				    const uint8_t *src, size_t len,
-				    uint8_t *dst, uint8_t *tag, size_t *tag_len)
+				    uint8_t *dst, size_t *dst_len,
+					uint8_t *tag, size_t *tag_len)
 {
+	*dst_len = len;
 	return internal_aes_gcm_enc_final(&to_aes_gcm_ctx(aec)->ctx, src, len,
 					  dst, tag, tag_len);
 }
 
 static TEE_Result aes_gcm_dec_final(struct crypto_authenc_ctx *aec,
 				    const uint8_t *src, size_t len,
-				    uint8_t *dst, const uint8_t *tag,
-				    size_t tag_len)
+				    uint8_t *dst, size_t *dst_len,
+					const uint8_t *tag, size_t tag_len)
 {
+	*dst_len = len;
 	return internal_aes_gcm_dec_final(&to_aes_gcm_ctx(aec)->ctx, src, len,
 					  dst, tag, tag_len);
 }

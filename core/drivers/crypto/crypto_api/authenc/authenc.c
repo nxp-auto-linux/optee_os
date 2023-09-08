@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: BSD-2-Clause
 /*
  * Copyright (c) 2021, STMicroelectronics - All Rights Reserved
+ * Copyright 2023 NXP
  *
  * Crypto authenc interface implementation to enable HW driver.
  */
@@ -151,7 +152,8 @@ static TEE_Result authenc_update_aad(struct crypto_authenc_ctx *ctx,
 static TEE_Result authenc_update_payload(struct crypto_authenc_ctx *ctx,
 					 TEE_OperationMode mode,
 					 const uint8_t *data,
-					 size_t len, uint8_t *dst)
+					 size_t len, uint8_t *dst,
+					 size_t *dst_len)
 {
 	TEE_Result ret = TEE_ERROR_NOT_IMPLEMENTED;
 	struct crypto_authenc *authenc = to_authenc_ctx(ctx);
@@ -173,10 +175,11 @@ static TEE_Result authenc_update_payload(struct crypto_authenc_ctx *ctx,
 			.src.data = (uint8_t *)data,
 			.src.length = len,
 			.dst.data = dst,
-			.dst.length = len,
+			.dst.length = *dst_len,
 		};
 
 		ret = authenc->op->update_payload(&dupdate);
+		*dst_len = dupdate.dst.length;
 	}
 
 	CRYPTO_TRACE("authenc ret 0x%" PRIx32, ret);
@@ -196,7 +199,7 @@ static TEE_Result authenc_update_payload(struct crypto_authenc_ctx *ctx,
  */
 static TEE_Result authenc_enc_final(struct crypto_authenc_ctx *ctx,
 				    const uint8_t *data, size_t len,
-				    uint8_t *dst, uint8_t *tag,
+				    uint8_t *dst, size_t *dst_len, uint8_t *tag,
 				    size_t *tag_len)
 {
 	TEE_Result ret = TEE_ERROR_NOT_IMPLEMENTED;
@@ -218,12 +221,13 @@ static TEE_Result authenc_enc_final(struct crypto_authenc_ctx *ctx,
 			.src.data = (uint8_t *)data,
 			.src.length = len,
 			.dst.data = dst,
-			.dst.length = len,
+			.dst.length = *dst_len,
 			.tag.data = tag,
 			.tag.length = *tag_len
 		};
 
 		ret = authenc->op->enc_final(&dfinal);
+		*dst_len = dfinal.dst.length;
 		if (ret == TEE_SUCCESS)
 			*tag_len = dfinal.tag.length;
 	}
@@ -244,8 +248,8 @@ static TEE_Result authenc_enc_final(struct crypto_authenc_ctx *ctx,
  */
 static TEE_Result authenc_dec_final(struct crypto_authenc_ctx *ctx,
 				    const uint8_t *data, size_t len,
-				    uint8_t *dst, const uint8_t *tag,
-				    size_t tag_len)
+				    uint8_t *dst, size_t *dst_len,
+					const uint8_t *tag, size_t tag_len)
 {
 	TEE_Result ret = TEE_ERROR_NOT_IMPLEMENTED;
 	struct crypto_authenc *authenc = to_authenc_ctx(ctx);
@@ -266,12 +270,13 @@ static TEE_Result authenc_dec_final(struct crypto_authenc_ctx *ctx,
 			.src.data = (uint8_t *)data,
 			.src.length = len,
 			.dst.data = dst,
-			.dst.length = len,
+			.dst.length = *dst_len,
 			.tag.data = (uint8_t *)tag,
 			.tag.length = tag_len
 		};
 
 		ret = authenc->op->dec_final(&dfinal);
+		*dst_len = dfinal.dst.length;
 	}
 
 	CRYPTO_TRACE("authenc ret 0x%" PRIx32, ret);

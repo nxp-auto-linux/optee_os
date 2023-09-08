@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: BSD-2-Clause
 /*
  * Copyright (c) 2014-2019, Linaro Limited
+ * Copyright 2023 NXP
  */
 
 #include <assert.h>
@@ -119,10 +120,11 @@ static TEE_Result crypto_aes_ccm_update_aad(struct crypto_authenc_ctx *aectx,
 static TEE_Result
 crypto_aes_ccm_update_payload(struct crypto_authenc_ctx *aectx,
 			      TEE_OperationMode mode, const uint8_t *src_data,
-			      size_t len, uint8_t *dst_data)
+			      size_t len, uint8_t *dst_data, size_t *dst_len)
 {
 	int ltc_res = 0;
 	int dir = 0;
+	*dst_len = len;
 	struct tee_ccm_state *ccm = to_tee_ccm_state(aectx);
 	unsigned char *pt = NULL;
 	unsigned char *ct = NULL;
@@ -146,16 +148,17 @@ crypto_aes_ccm_update_payload(struct crypto_authenc_ctx *aectx,
 static TEE_Result crypto_aes_ccm_enc_final(struct crypto_authenc_ctx *aectx,
 					   const uint8_t *src_data,
 					   size_t len, uint8_t *dst_data,
-					   uint8_t *dst_tag,
+					   size_t *dst_len, uint8_t *dst_tag,
 					   size_t *dst_tag_len)
 {
 	TEE_Result res = TEE_SUCCESS;
 	struct tee_ccm_state *ccm = to_tee_ccm_state(aectx);
 	int ltc_res = 0;
 
+	*dst_len = len;
 	/* Finalize the remaining buffer */
 	res = crypto_aes_ccm_update_payload(aectx, TEE_MODE_ENCRYPT, src_data,
-					    len, dst_data);
+					    len, dst_data, dst_len);
 	if (res != TEE_SUCCESS)
 		return res;
 
@@ -177,7 +180,7 @@ static TEE_Result crypto_aes_ccm_enc_final(struct crypto_authenc_ctx *aectx,
 
 static TEE_Result crypto_aes_ccm_dec_final(struct crypto_authenc_ctx *aectx,
 					   const uint8_t *src_data, size_t len,
-					   uint8_t *dst_data,
+					   uint8_t *dst_data, size_t *dst_len,
 					   const uint8_t *tag, size_t tag_len)
 {
 	TEE_Result res = TEE_ERROR_BAD_STATE;
@@ -186,6 +189,7 @@ static TEE_Result crypto_aes_ccm_dec_final(struct crypto_authenc_ctx *aectx,
 	uint8_t dst_tag[TEE_CCM_TAG_MAX_LENGTH] = { 0 };
 	unsigned long ltc_tag_len = tag_len;
 
+	*dst_len = len;
 	if (tag_len == 0)
 		return TEE_ERROR_SHORT_BUFFER;
 	if (tag_len > TEE_CCM_TAG_MAX_LENGTH)
@@ -193,7 +197,7 @@ static TEE_Result crypto_aes_ccm_dec_final(struct crypto_authenc_ctx *aectx,
 
 	/* Process the last buffer, if any */
 	res = crypto_aes_ccm_update_payload(aectx, TEE_MODE_DECRYPT, src_data,
-					    len, dst_data);
+					    len, dst_data, dst_len);
 	if (res != TEE_SUCCESS)
 		return res;
 

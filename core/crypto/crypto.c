@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: BSD-2-Clause
 /*
  * Copyright (c) 2017, Linaro Limited
- * Copyright 2020 NXP
+ * Copyright 2020, 2023 NXP
  * Copyright 2021, SumUp Service GmbH
  */
 
@@ -396,10 +396,10 @@ TEE_Result crypto_authenc_update_payload(void *ctx, TEE_OperationMode mode,
 {
 	if (*dst_len < src_len)
 		return TEE_ERROR_SHORT_BUFFER;
-	*dst_len = src_len;
+
 
 	return ae_ops(ctx)->update_payload(ctx, mode, src_data, src_len,
-					   dst_data);
+					   dst_data, dst_len);
 }
 
 TEE_Result crypto_authenc_enc_final(void *ctx, const uint8_t *src_data,
@@ -409,10 +409,9 @@ TEE_Result crypto_authenc_enc_final(void *ctx, const uint8_t *src_data,
 {
 	if (*dst_len < src_len)
 		return TEE_ERROR_SHORT_BUFFER;
-	*dst_len = src_len;
 
 	return ae_ops(ctx)->enc_final(ctx, src_data, src_len, dst_data,
-				      dst_tag, dst_tag_len);
+				      dst_len, dst_tag, dst_tag_len);
 }
 
 TEE_Result crypto_authenc_dec_final(void *ctx, const uint8_t *src_data,
@@ -422,10 +421,9 @@ TEE_Result crypto_authenc_dec_final(void *ctx, const uint8_t *src_data,
 {
 	if (*dst_len < src_len)
 		return TEE_ERROR_SHORT_BUFFER;
-	*dst_len = src_len;
 
-	return ae_ops(ctx)->dec_final(ctx, src_data, src_len, dst_data, tag,
-				      tag_len);
+	return ae_ops(ctx)->dec_final(ctx, src_data, src_len, dst_data, dst_len,
+				      tag, tag_len);
 }
 
 void crypto_authenc_final(void *ctx)

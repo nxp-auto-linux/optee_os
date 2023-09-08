@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: BSD-2-Clause
 /*
  * Copyright (c) 2014-2019, Linaro Limited
+ * Copyright 2023 NXP
  */
 
 #include <assert.h>
@@ -104,7 +105,7 @@ static TEE_Result crypto_aes_gcm_update_aad(struct crypto_authenc_ctx *aectx,
 static TEE_Result
 crypto_aes_gcm_update_payload(struct crypto_authenc_ctx *aectx,
 			      TEE_OperationMode mode, const uint8_t *src_data,
-			      size_t len, uint8_t *dst_data)
+			      size_t len, uint8_t *dst_data, size_t *dst_len)
 {
 	TEE_Result res = TEE_SUCCESS;
 	int ltc_res = 0;
@@ -113,6 +114,7 @@ crypto_aes_gcm_update_payload(struct crypto_authenc_ctx *aectx,
 	unsigned char *pt = NULL;
 	unsigned char *ct = NULL;
 
+	*dst_len = len;
 	if (mode == TEE_MODE_ENCRYPT) {
 		pt = (unsigned char *)src_data;
 		ct = dst_data;
@@ -140,16 +142,18 @@ crypto_aes_gcm_update_payload(struct crypto_authenc_ctx *aectx,
 
 static TEE_Result crypto_aes_gcm_enc_final(struct crypto_authenc_ctx *aectx,
 					   const uint8_t *src_data, size_t len,
-					   uint8_t *dst_data, uint8_t *dst_tag,
+					   uint8_t *dst_data, size_t *dst_len,
+					   uint8_t *dst_tag,
 					   size_t *dst_tag_len)
 {
 	TEE_Result res = TEE_SUCCESS;
 	struct tee_gcm_state *gcm = to_tee_gcm_state(aectx);
 	int ltc_res = 0;
 
+	*dst_len = len;
 	/* Finalize the remaining buffer */
 	res = crypto_aes_gcm_update_payload(aectx, TEE_MODE_ENCRYPT, src_data,
-					    len, dst_data);
+					    len, dst_data, dst_len);
 	if (res != TEE_SUCCESS)
 		return res;
 
@@ -170,7 +174,7 @@ static TEE_Result crypto_aes_gcm_enc_final(struct crypto_authenc_ctx *aectx,
 
 static TEE_Result crypto_aes_gcm_dec_final(struct crypto_authenc_ctx *aectx,
 					   const uint8_t *src_data, size_t len,
-					   uint8_t *dst_data,
+					   uint8_t *dst_data, size_t *dst_len,
 					   const uint8_t *tag, size_t tag_len)
 {
 	TEE_Result res = TEE_ERROR_BAD_STATE;
@@ -184,9 +188,10 @@ static TEE_Result crypto_aes_gcm_dec_final(struct crypto_authenc_ctx *aectx,
 	if (tag_len > TEE_GCM_TAG_MAX_LENGTH)
 		return TEE_ERROR_BAD_STATE;
 
+	*dst_len = len;
 	/* Process the last buffer, if any */
 	res = crypto_aes_gcm_update_payload(aectx, TEE_MODE_DECRYPT, src_data,
-					    len, dst_data);
+					    len, dst_data, dst_len);
 	if (res != TEE_SUCCESS)
 		return res;
 
