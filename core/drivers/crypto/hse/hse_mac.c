@@ -14,6 +14,8 @@
 #include <utee_defines.h>
 #include <util.h>
 
+#define MIN_DIGEST_LENGTH	8
+
 struct hse_mac_tpl {
 	uint32_t algo_id;
 	uint32_t algo_mode;
@@ -503,7 +505,7 @@ static TEE_Result hse_mac_final(struct crypto_mac_ctx *ctx, uint8_t *digest,
 	if (!digest || !len)
 		return TEE_ERROR_BAD_PARAMETERS;
 
-	if (len < hse_ctx->mac_tpl->tagsize)
+	if (len < MIN_DIGEST_LENGTH)
 		return TEE_ERROR_BAD_PARAMETERS;
 
 	if (ADD_OVERFLOW(cached_blks->length, left_bytes->length, &total_len))
