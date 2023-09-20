@@ -47,6 +47,13 @@ ifeq ($(CFG_NXP_HSE_MAC_DRV),y)
 $(call force,CFG_CRYPTO_DRV_MAC,y)
 endif
 
+# HSE ECC Driver is disabled by default, to use it set
+# CFG_NXP_HSE_ECC_DRV to y.
+CFG_NXP_HSE_ECC_DRV ?= n
+ifeq ($(CFG_NXP_HSE_ECC_DRV),y)
+$(call force,CFG_CRYPTO_DRV_ECC,y)
+endif
+
 # Enable HSE RSA Driver
 CFG_NXP_HSE_RSA_DRV ?= y
 ifeq ($(CFG_NXP_HSE_RSA_DRV),y)
@@ -56,7 +63,7 @@ $(call force,CFG_CRYPTO_DRV_RSA,y)
 $(call force,CFG_CRYPTO_RSASSA_NA1,n)
 endif
 
-ifeq ($(call hse-one-enabled,RSA),y)
+ifeq ($(call hse-one-enabled,RSA ECC),y)
 $(call force,CFG_CRYPTO_DRV_ACIPHER,y)
 endif
 
@@ -109,6 +116,8 @@ endef
 $(eval $(call hse-keygroup-define, HMAC, $(HSE_RAM_CATALOG), 4, 3))
 $(eval $(call hse-keygroup-define, AES, $(HSE_RAM_CATALOG), 2, 7))
 $(eval $(call hse-keygroup-define, SHARED_SECRET, $(HSE_RAM_CATALOG), 3, 1))
+$(eval $(call hse-keygroup-define, ECCPAIR, $(HSE_NVM_CATALOG), 10, 1))
+$(eval $(call hse-keygroup-define, ECCPUB, $(HSE_NVM_CATALOG), 11, 1))
 $(eval $(call hse-keygroup-define, RSAPAIR, $(HSE_NVM_CATALOG), 12, 2))
 $(eval $(call hse-keygroup-define, RSAPUB, $(HSE_NVM_CATALOG), 13, 2))
 
