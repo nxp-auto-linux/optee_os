@@ -28,20 +28,20 @@ enum hse_ch_type {
 	HSE_CH_TYPE_STREAM = 2u,
 };
 
-/**
- * struct hse_buf - HSE buffer management struct
- * @data: data buffer
- * @paddr: physical address of the buffer
- * @size: number of bytes in the data buffer
- */
-struct hse_buf {
-	uint8_t *data; /* Data buffer */
-	paddr_t paddr; /* Physical address of the buffer */
-	size_t size;   /* Number of bytes in the data buffer */
-};
+/* Opaque data type */
+struct hse_buf;
 
-TEE_Result hse_buf_alloc(struct hse_buf *buf, size_t size);
+struct hse_buf *hse_buf_alloc(size_t size);
 void hse_buf_free(struct hse_buf *buf);
+struct hse_buf *hse_buf_init(const void *data, size_t size);
+
+TEE_Result hse_buf_put_data(struct hse_buf *buf, const void *data, size_t size,
+			    size_t offset);
+TEE_Result hse_buf_get_data(struct hse_buf *buf, void *data, size_t size,
+			    size_t offset);
+
+uint32_t hse_buf_get_size(struct hse_buf *buf);
+paddr_t hse_buf_get_paddr(struct hse_buf *buf);
 
 bool is_hse_status_ok(void);
 

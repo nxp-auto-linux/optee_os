@@ -49,7 +49,7 @@ struct hse_cipher_tpl {
 struct hse_cipher_ctx {
 	const struct hse_cipher_tpl *alg_tpl;
 	bool initialized;
-	struct hse_buf iv;
+	uint8_t iv[TEE_AES_BLOCK_SIZE];
 	uint8_t key[AES_KEY_SIZE_256];
 	size_t key_len;
 	hseKeyHandle_t key_handle;
@@ -130,7 +130,7 @@ static TEE_Result hse_import_symkey(struct drvcrypt_buf key,
 {
 	TEE_Result ret;
 	hseKeyInfo_t key_info = {0};
-	struct hse_buf key_buf;
+	struct hse_buf *key_buf = NULL;
 	size_t key_bitlen = HSE_BYTES_TO_BITS(key.length);
 
 	if (!key.data || !key.length)
@@ -140,10 +140,9 @@ static TEE_Result hse_import_symkey(struct drvcrypt_buf key,
 	if (key_bitlen > UINT16_MAX)
 		return TEE_ERROR_BAD_PARAMETERS;
 
-	ret = hse_buf_alloc(&key_buf, key.length);
-	if (ret != TEE_SUCCESS)
-		return ret;
-	memcpy(key_buf.data, key.data, key_buf.size);
+	key_buf = hse_buf_init(key.data, key.length);
+	if (!key_buf)
+		return TEE_ERROR_OUT_OF_MEMORY;
 
 	key_info.keyFlags = (direction == HSE_CIPHER_DIR_ENCRYPT) ?
 			    HSE_KF_USAGE_ENCRYPT : HSE_KF_USAGE_DECRYPT;
@@ -151,9 +150,9 @@ static TEE_Result hse_import_symkey(struct drvcrypt_buf key,
 	key_info.keyType = key_type;
 
 	ret = hse_acquire_and_import_key(handle, &key_info, NULL, NULL,
-					 &key_buf);
+					 key_buf);
 
-	hse_buf_free(&key_buf);
+	hse_buf_free(key_buf);
 
 	return ret;
 }
@@ -182,7 +181,6 @@ static void hse_cipher_free_ctx(void *ctx)
 	if (!hse_ctx)
 		return;
 
-	hse_buf_free(&hse_ctx->iv);
 	hse_release_and_erase_key(hse_ctx->key_handle);
 
 	free(hse_ctx);
@@ -216,12 +214,6 @@ static TEE_Result hse_cipher_alloc_ctx(void **ctx, uint32_t algo)
 	}
 	hse_ctx->alg_tpl = alg_tpl;
 
-	if (alg_tpl->ivsize) {
-		ret = hse_buf_alloc(&hse_ctx->iv, alg_tpl->ivsize);
-		if (ret != TEE_SUCCESS)
-			goto out_free_ctx;
-	}
-
 	hse_ctx->key_handle = HSE_INVALID_KEY_HANDLE;
 
 	*ctx = hse_ctx;
@@ -229,7 +221,6 @@ static TEE_Result hse_cipher_alloc_ctx(void **ctx, uint32_t algo)
 	DMSG("Allocated context for algo %s", alg_tpl->cipher_name);
 	return ret;
 
-	hse_buf_free(&hse_ctx->iv);
 out_free_ctx:
 	free(hse_ctx);
 out_err:
@@ -275,7 +266,7 @@ static TEE_Result hse_cipher_init(struct drvcrypt_cipher_init *dinit)
 		goto out;
 
 	if (dinit->iv.data && dinit->iv.length == alg->ivsize)
-		memcpy(ctx->iv.data, dinit->iv.data, dinit->iv.length);
+		memcpy(ctx->iv, dinit->iv.data, dinit->iv.length);
 
 	ctx->initialized = true;
 
@@ -320,10 +311,12 @@ static TEE_Result hse_cipher_update(struct drvcrypt_cipher_update *dupdate)
 	TEE_Result ret = TEE_SUCCESS;
 	struct hse_cipher_ctx *ctx = dupdate->ctx;
 	const struct hse_cipher_tpl *alg = ctx->alg_tpl;
-	struct hse_buf buf;
-	size_t  src_len, blocksize = alg->blocksize, blks;
+	struct hse_buf *buf = NULL, *iv_buf = NULL;
+	size_t src_len, dst_len = dupdate->dst.length,
+	       blocksize = alg->blocksize, blks;
 	size_t prev_size = ctx->prev_size, rem_size;
-	uint8_t *src_data, *last_block, *prev_data = ctx->prev_data;
+	uint8_t *src_data, *dst_data = dupdate->dst.data, *last_block,
+		*prev_data = ctx->prev_data;
 	HSE_SRV_INIT(hseSrvDescriptor_t, srv_desc);
 
 	switch (alg->block_mode) {
@@ -364,11 +357,19 @@ static TEE_Result hse_cipher_update(struct drvcrypt_cipher_update *dupdate)
 	memcpy(src_data, prev_data, prev_size);
 	memcpy(src_data + prev_size, dupdate->src.data, dupdate->src.length);
 
-	ret = hse_buf_alloc(&buf, src_len);
-	if (ret != TEE_SUCCESS)
+	buf = hse_buf_init(src_data, src_len);
+	if (!buf) {
+		ret = TEE_ERROR_OUT_OF_MEMORY;
 		goto out_free_src;
+	}
 
-	memcpy(buf.data, src_data, buf.size);
+	if (ctx->alg_tpl->ivsize) {
+		iv_buf = hse_buf_init(ctx->iv, ctx->alg_tpl->ivsize);
+		if (!iv_buf) {
+			ret = TEE_ERROR_OUT_OF_MEMORY;
+			goto out_free_buf;
+		}
+	}
 
 	srv_desc.srvId = HSE_SRV_ID_SYM_CIPHER;
 	srv_desc.hseSrv.symCipherReq.accessMode = HSE_ACCESS_MODE_ONE_PASS;
@@ -376,14 +377,11 @@ static TEE_Result hse_cipher_update(struct drvcrypt_cipher_update *dupdate)
 	srv_desc.hseSrv.symCipherReq.cipherBlockMode = alg->block_mode;
 	srv_desc.hseSrv.symCipherReq.cipherDir = ctx->direction;
 	srv_desc.hseSrv.symCipherReq.keyHandle = ctx->key_handle;
-	srv_desc.hseSrv.symCipherReq.pIV = ctx->iv.paddr;
+	srv_desc.hseSrv.symCipherReq.pIV = hse_buf_get_paddr(iv_buf);
 	srv_desc.hseSrv.symCipherReq.sgtOption = HSE_SGT_OPTION_NONE;
-	srv_desc.hseSrv.symCipherReq.inputLength = buf.size;
-	srv_desc.hseSrv.symCipherReq.pInput = buf.paddr;
-	srv_desc.hseSrv.symCipherReq.pOutput = buf.paddr;
-
-	cache_operation(TEE_CACHEFLUSH, buf.data, buf.size);
-	cache_operation(TEE_CACHEFLUSH, ctx->iv.data, alg->ivsize);
+	srv_desc.hseSrv.symCipherReq.inputLength = hse_buf_get_size(buf);
+	srv_desc.hseSrv.symCipherReq.pInput = hse_buf_get_paddr(buf);
+	srv_desc.hseSrv.symCipherReq.pOutput = hse_buf_get_paddr(buf);
 
 	ret = hse_srv_req_sync(HSE_CHANNEL_ANY, &srv_desc);
 	if (ret != TEE_SUCCESS) {
@@ -391,24 +389,23 @@ static TEE_Result hse_cipher_update(struct drvcrypt_cipher_update *dupdate)
 		goto out_free_buf;
 	}
 
-	cache_operation(TEE_CACHEINVALIDATE, buf.data, buf.size);
-	memcpy(dupdate->dst.data, buf.data + prev_size, dupdate->dst.length);
+	hse_buf_get_data(buf, dst_data, dst_len, prev_size);
 
 	switch (alg->block_mode) {
 	case HSE_CIPHER_BLOCK_MODE_CBC:
 		if (ctx->direction == HSE_CIPHER_DIR_ENCRYPT)
-			last_block = buf.data  + buf.size - alg->ivsize;
+			last_block = dst_data  + dst_len - alg->ivsize;
 		else
 			last_block = src_data + src_len - alg->ivsize;
 
-		memcpy(ctx->iv.data, last_block, alg->ivsize);
+		memcpy(ctx->iv, last_block, alg->ivsize);
 		break;
 
 	case HSE_CIPHER_BLOCK_MODE_CTR:
 		blks = src_len / blocksize;
 		rem_size = src_len % blocksize;
 
-		hse_ctr_inc(ctx->iv.data, blks, blocksize);
+		hse_ctr_inc(ctx->iv, blks, blocksize);
 
 		memcpy(prev_data, src_data + blks, rem_size);
 		ctx->prev_size = rem_size;
@@ -420,7 +417,8 @@ static TEE_Result hse_cipher_update(struct drvcrypt_cipher_update *dupdate)
 	}
 
 out_free_buf:
-	hse_buf_free(&buf);
+	hse_buf_free(buf);
+	hse_buf_free(iv_buf);
 
 out_free_src:
 	free(src_data);
@@ -474,7 +472,7 @@ static void hse_cipher_copy_state(void *dst_ctx, void *src_ctx)
 	if (!alg->ivsize)
 		return;
 
-	memcpy(dst->iv.data, src->iv.data, alg->ivsize);
+	memcpy(dst->iv, src->iv, alg->ivsize);
 }
 
 static struct drvcrypt_cipher driver_cipher = {

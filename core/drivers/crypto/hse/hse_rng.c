@@ -32,7 +32,7 @@
  * @in_progress: indicates if an async request is in progress
  */
 struct hse_rng_ctx {
-	struct hse_buf cache;
+	struct hse_buf *cache;
 	unsigned int cache_idx;
 	hseSrvDescriptor_t srv_desc;
 	unsigned int req_lock; /* data request spinlock */
@@ -54,7 +54,6 @@ static inline void set_rand_size(unsigned int size)
 static TEE_Result hse_rng_sync_refill(unsigned int size)
 {
 	TEE_Result err;
-	struct hse_buf cache = rng_ctx.cache;
 
 	set_rand_size(size);
 	err = hse_srv_req_sync(HSE_CHANNEL_ANY, &rng_ctx.srv_desc);
@@ -62,8 +61,6 @@ static TEE_Result hse_rng_sync_refill(unsigned int size)
 		DMSG("HSE RNG cache refill sync request failed: %x", err);
 		return err;
 	}
-
-	cache_operation(TEE_CACHEINVALIDATE, cache.data, cache.size);
 
 	rng_ctx.cache_idx = size;
 
@@ -78,7 +75,6 @@ static TEE_Result hse_rng_sync_refill(unsigned int size)
 static void hse_rng_refill_done(TEE_Result err, void *ctx __unused)
 {
 	uint32_t exceptions;
-	struct hse_buf cache = rng_ctx.cache;
 
 	if (err != TEE_SUCCESS) {
 		DMSG("HSE RNG cache refill callback failed: %x", err);
@@ -87,10 +83,7 @@ static void hse_rng_refill_done(TEE_Result err, void *ctx __unused)
 
 	exceptions = cpu_spin_lock_xsave(&rng_ctx.req_lock);
 
-	cache_operation(TEE_CACHEINVALIDATE, cache.data, cache.size);
-
 	rng_ctx.cache_idx = HSE_RNG_CACHE_MAX;
-
 	rng_ctx.in_progress = false;
 
 	cpu_spin_unlock_xrestore(&rng_ctx.req_lock, exceptions);
@@ -132,7 +125,7 @@ static TEE_Result hse_rng_async_refill(void)
 static TEE_Result hse_rng_read(void *buf, size_t blen)
 {
 	TEE_Result ret = TEE_SUCCESS;
-	struct hse_buf cache = rng_ctx.cache;
+	struct hse_buf *cache = rng_ctx.cache;
 	unsigned int *cache_idx = &rng_ctx.cache_idx;
 	uint32_t exceptions;
 
@@ -142,7 +135,7 @@ static TEE_Result hse_rng_read(void *buf, size_t blen)
 	exceptions = cpu_spin_lock_xsave(&rng_ctx.req_lock);
 
 	if (blen <= *cache_idx) {
-		memcpy(buf, &cache.data[*cache_idx - blen], blen);
+		hse_buf_get_data(cache, buf, blen, *cache_idx - blen);
 		*cache_idx -= blen;
 
 		if (*cache_idx < HSE_RNG_CACHE_MIN)
@@ -164,7 +157,8 @@ static TEE_Result hse_rng_read(void *buf, size_t blen)
 				goto out;
 
 			copylen = MIN(remlen, *cache_idx);
-			memcpy(buf, &cache.data[*cache_idx - copylen], copylen);
+			hse_buf_get_data(cache, buf, copylen,
+					 *cache_idx - copylen);
 			*cache_idx -= copylen;
 
 			remlen -= copylen;
@@ -188,12 +182,12 @@ TEE_Result hse_rng_initialize(void)
 	TEE_Result err;
 	hseGetRandomNumSrv_t rand_srv;
 
-	err = hse_buf_alloc(&rng_ctx.cache, HSE_RNG_CACHE_MAX);
-	if (err)
-		return err;
+	rng_ctx.cache = hse_buf_alloc(HSE_RNG_CACHE_MAX);
+	if (!rng_ctx.cache)
+		return TEE_ERROR_OUT_OF_MEMORY;
 
 	rand_srv.rngClass = HSE_RNG_CLASS_PTG3;
-	rand_srv.pRandomNum = rng_ctx.cache.paddr;
+	rand_srv.pRandomNum = hse_buf_get_paddr(rng_ctx.cache);
 
 	memset(&rng_ctx.srv_desc, 0, sizeof(rng_ctx.srv_desc));
 	rng_ctx.srv_desc.srvId = HSE_SRV_ID_GET_RANDOM_NUM;

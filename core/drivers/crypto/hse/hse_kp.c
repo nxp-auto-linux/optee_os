@@ -52,20 +52,6 @@ static TEE_Result verify_key_info(hseKeyType_t key_type, uint32_t bits_size,
 	return ret;
 }
 
-static TEE_Result hsecpy_flush(struct hse_buf *buff, uint8_t *data, size_t size)
-{
-	TEE_Result ret = TEE_SUCCESS;
-
-	ret = hse_buf_alloc(buff, size);
-	if (ret != TEE_SUCCESS)
-		return ret;
-
-	memcpy(buff->data, data, buff->size);
-	cache_operation(TEE_CACHEFLUSH, buff->data, buff->size);
-
-	return ret;
-}
-
 TEE_Result hse_provision_sym_key(void *payload,
 				 uint8_t key_group,
 				 uint8_t key_slot)
@@ -74,7 +60,7 @@ TEE_Result hse_provision_sym_key(void *payload,
 	HSE_SRV_INIT(hseSrvDescriptor_t, srv_desc);
 	HSE_SRV_INIT(hseImportKeySrv_t, import_key_req);
 	TEE_Result ret = TEE_SUCCESS;
-	struct hse_buf keyinfo_buff, tag, iv, enckey;
+	struct hse_buf *keyinfo_buff, *tag, *iv, *enckey;
 	hseKeyHandle_t key_handle;
 	hseKeyInfo_t key_info;
 	struct hse_kp_payload *kp_buff = (struct hse_kp_payload *)payload;
@@ -97,35 +83,42 @@ TEE_Result hse_provision_sym_key(void *payload,
 	if (ret != TEE_SUCCESS)
 		return ret;
 
-	ret = hsecpy_flush(&keyinfo_buff, (uint8_t *)&key_info,
-			   sizeof(key_info));
-	if (ret != TEE_SUCCESS)
+	keyinfo_buff = hse_buf_init((uint8_t *)&key_info, sizeof(key_info));
+	if (!keyinfo_buff) {
+		ret = TEE_ERROR_OUT_OF_MEMORY;
 		goto out;
+	}
 
-	ret = hsecpy_flush(&tag, kp_buff->tag, HSE_GCM_TAG_SIZE);
-	if (ret != TEE_SUCCESS)
+	tag = hse_buf_init(kp_buff->tag, HSE_GCM_TAG_SIZE);
+	if (!tag) {
+		ret = TEE_ERROR_OUT_OF_MEMORY;
 		goto out_free_info;
+	}
 
-	ret = hsecpy_flush(&iv, kp_buff->iv, HSE_GCM_IV_SIZE);
-	if (ret != TEE_SUCCESS)
+	iv = hse_buf_init(kp_buff->iv, HSE_GCM_IV_SIZE);
+	if (!iv) {
+		ret = TEE_ERROR_OUT_OF_MEMORY;
 		goto out_free_tag;
+	}
 
-	ret = hsecpy_flush(&enckey, kp_buff->enckey, kp_buff->enckey_size);
-	if (ret != TEE_SUCCESS)
+	enckey = hse_buf_init(kp_buff->enckey, kp_buff->enckey_size);
+	if (!enckey) {
+		ret = TEE_ERROR_OUT_OF_MEMORY;
 		goto out_free_iv;
+	}
 
 	cipher_scheme.aeadCipher.authCipherMode = HSE_AUTH_CIPHER_MODE_GCM;
 	cipher_scheme.aeadCipher.tagLength = HSE_GCM_TAG_SIZE;
-	cipher_scheme.aeadCipher.pTag = tag.paddr;
+	cipher_scheme.aeadCipher.pTag = hse_buf_get_paddr(tag);
 	cipher_scheme.aeadCipher.ivLength = HSE_GCM_IV_SIZE;
-	cipher_scheme.aeadCipher.pIV = iv.paddr;
-	cipher_scheme.aeadCipher.aadLength = keyinfo_buff.size;
-	cipher_scheme.aeadCipher.pAAD = keyinfo_buff.paddr;
+	cipher_scheme.aeadCipher.pIV = hse_buf_get_paddr(iv);
+	cipher_scheme.aeadCipher.aadLength = hse_buf_get_size(keyinfo_buff);
+	cipher_scheme.aeadCipher.pAAD = hse_buf_get_paddr(keyinfo_buff);
 
 	import_key_req.targetKeyHandle = key_handle;
-	import_key_req.pKeyInfo = keyinfo_buff.paddr;
-	import_key_req.pKey[2] = enckey.paddr;
-	import_key_req.keyLen[2] = enckey.size;
+	import_key_req.pKeyInfo = hse_buf_get_paddr(keyinfo_buff);
+	import_key_req.pKey[2] = hse_buf_get_paddr(enckey);
+	import_key_req.keyLen[2] = hse_buf_get_size(enckey);
 	import_key_req.cipher.cipherKeyHandle = HSE_NVM_KEK_HANDLE;
 	import_key_req.cipher.cipherScheme = cipher_scheme;
 	import_key_req.keyContainer.authKeyHandle = HSE_INVALID_KEY_HANDLE;
@@ -137,13 +130,13 @@ TEE_Result hse_provision_sym_key(void *payload,
 	if (ret != TEE_SUCCESS)
 		DMSG("Key provision service request failed with err 0x%x", ret);
 
-	hse_buf_free(&enckey);
+	hse_buf_free(enckey);
 out_free_iv:
-	hse_buf_free(&iv);
+	hse_buf_free(iv);
 out_free_tag:
-	hse_buf_free(&tag);
+	hse_buf_free(tag);
 out_free_info:
-	hse_buf_free(&keyinfo_buff);
+	hse_buf_free(keyinfo_buff);
 out:
 	return ret;
 }

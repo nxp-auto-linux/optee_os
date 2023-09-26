@@ -145,14 +145,10 @@ static TEE_Result update_operation(struct hse_hash_context *hse_ctx,
 	srv_desc.hseSrv.hashReq.hashAlgo = hse_ctx->algo->algo_type;
 	srv_desc.hseSrv.hashReq.accessMode = HSE_ACCESS_MODE_UPDATE;
 
-	if (in_buf->size > UINT32_MAX)
-		return TEE_ERROR_OVERFLOW;
-
-	srv_desc.hseSrv.hashReq.inputLength = in_buf->size;
+	srv_desc.hseSrv.hashReq.inputLength = hse_buf_get_size(in_buf);
 	srv_desc.hseSrv.hashReq.streamId = hse_ctx->stream_id;
-	srv_desc.hseSrv.hashReq.pInput = in_buf->paddr;
+	srv_desc.hseSrv.hashReq.pInput = hse_buf_get_paddr(in_buf);
 	srv_desc.hseSrv.hashReq.sgtOption = HSE_SGT_OPTION_NONE;
-	cache_operation(TEE_CACHEFLUSH, in_buf->data, in_buf->size);
 
 	res = hse_srv_req_sync(hse_ctx->channel, &srv_desc);
 	if (res != TEE_SUCCESS)
@@ -166,7 +162,7 @@ static TEE_Result hse_hash_update(struct crypto_hash_ctx *ctx,
 {
 	TEE_Result res;
 	struct hse_hash_context *hse_ctx;
-	struct hse_buf in_buf = {0};
+	struct hse_buf *in_buf = NULL;
 	size_t rem, idx = 0, actual_len = 0;
 
 	hse_ctx = container_of(ctx, struct hse_hash_context, hash_ctx);
@@ -182,21 +178,26 @@ static TEE_Result hse_hash_update(struct crypto_hash_ctx *ctx,
 		return TEE_SUCCESS;
 	}
 
-	res = hse_buf_alloc(&in_buf, MAX_INPUT_BUF_SIZE);
-	if (res != TEE_SUCCESS)
+	in_buf = hse_buf_alloc(MAX_INPUT_BUF_SIZE);
+	if (!in_buf) {
+		res = TEE_ERROR_OUT_OF_MEMORY;
 		goto out;
-	memcpy(in_buf.data, hse_ctx->cached_block, hse_ctx->cached_size);
-	memcpy(in_buf.data + hse_ctx->cached_size, data,
-	       MAX_INPUT_BUF_SIZE - hse_ctx->cached_size);
-	res = update_operation(hse_ctx, &in_buf);
+	}
+
+	hse_buf_put_data(in_buf, hse_ctx->cached_block,
+			 hse_ctx->cached_size, 0);
+	hse_buf_put_data(in_buf, data,
+			 MAX_INPUT_BUF_SIZE - hse_ctx->cached_size,
+			 hse_ctx->cached_size);
+	res = update_operation(hse_ctx, in_buf);
 
 	if (res != TEE_SUCCESS)
 		goto out_free_buf;
 
 	idx = MAX_INPUT_BUF_SIZE - hse_ctx->cached_size;
 	while (len - idx > MAX_INPUT_BUF_SIZE) {
-		memcpy(in_buf.data, data + idx, MAX_INPUT_BUF_SIZE);
-		res = update_operation(hse_ctx, &in_buf);
+		hse_buf_put_data(in_buf, data + idx, MAX_INPUT_BUF_SIZE, 0);
+		res = update_operation(hse_ctx, in_buf);
 
 		if (res != TEE_SUCCESS)
 			goto out_free_buf;
@@ -216,7 +217,7 @@ static TEE_Result hse_hash_update(struct crypto_hash_ctx *ctx,
 	res = TEE_SUCCESS;
 
 out_free_buf:
-	hse_buf_free(&in_buf);
+	hse_buf_free(in_buf);
 out:
 	return res;
 }
@@ -226,7 +227,7 @@ static TEE_Result hse_hash_final(struct crypto_hash_ctx *ctx,
 {
 	struct hse_hash_context *hse_ctx;
 	TEE_Result res;
-	struct hse_buf in_buf = {0}, len_buf = {0}, out_buf = {0};
+	struct hse_buf *in_buf = NULL, *len_buf = NULL, *out_buf = NULL;
 
 	HSE_SRV_INIT(hseSrvDescriptor_t, srv_desc);
 
@@ -236,25 +237,25 @@ static TEE_Result hse_hash_final(struct crypto_hash_ctx *ctx,
 		return TEE_ERROR_BAD_PARAMETERS;
 
 	if (hse_ctx->cached_size) {
-		res = hse_buf_alloc(&in_buf, hse_ctx->cached_size);
-		if (res != TEE_SUCCESS)
+		in_buf = hse_buf_init(hse_ctx->cached_block,
+				      hse_ctx->cached_size);
+		if (!in_buf) {
+			res = TEE_ERROR_OUT_OF_MEMORY;
 			goto out;
-		memcpy(in_buf.data, hse_ctx->cached_block,
-		       hse_ctx->cached_size);
-		cache_operation(TEE_CACHEFLUSH, in_buf.data,
-				hse_ctx->cached_size);
+		}
 	}
 
-	res = hse_buf_alloc(&len_buf, sizeof(size_t));
-	if (res != TEE_SUCCESS)
+	len_buf = hse_buf_init(&len, sizeof(size_t));
+	if (!len_buf) {
+		res = TEE_ERROR_OUT_OF_MEMORY;
 		goto out_free_in_buf;
-	memcpy(len_buf.data, &len, sizeof(size_t));
-	cache_operation(TEE_CACHEFLUSH, len_buf.data, len_buf.size);
+	}
 
-	res = hse_buf_alloc(&out_buf, len);
-	if (res != TEE_SUCCESS)
+	out_buf = hse_buf_alloc(len);
+	if (!out_buf) {
+		res = TEE_ERROR_OUT_OF_MEMORY;
 		goto out_free_len_buf;
-	cache_operation(TEE_CACHEINVALIDATE, out_buf.data, out_buf.size);
+	}
 
 	srv_desc.srvId = HSE_SRV_ID_HASH;
 	srv_desc.hseSrv.hashReq.accessMode = HSE_ACCESS_MODE_FINISH;
@@ -262,22 +263,23 @@ static TEE_Result hse_hash_final(struct crypto_hash_ctx *ctx,
 	srv_desc.hseSrv.hashReq.streamId = hse_ctx->stream_id;
 	srv_desc.hseSrv.hashReq.hashAlgo = hse_ctx->algo->algo_type;
 	srv_desc.hseSrv.hashReq.inputLength = hse_ctx->cached_size;
-	srv_desc.hseSrv.hashReq.pInput = in_buf.paddr;
-	srv_desc.hseSrv.hashReq.pHashLength = len_buf.paddr;
-	srv_desc.hseSrv.hashReq.pHash = out_buf.paddr;
+	srv_desc.hseSrv.hashReq.pInput = hse_buf_get_paddr(in_buf);
+	srv_desc.hseSrv.hashReq.pHashLength = hse_buf_get_paddr(len_buf);
+	srv_desc.hseSrv.hashReq.pHash = hse_buf_get_paddr(out_buf);
 
 	res = hse_srv_req_sync(hse_ctx->channel, &srv_desc);
 	if (res != TEE_SUCCESS) {
 		EMSG("hse_srv_req_sync failed with err 0x%x", res);
 		goto out_free_out_buf;
 	}
-	memcpy(digest, out_buf.data, len);
+	hse_buf_get_data(out_buf, digest, len, 0);
+
 out_free_out_buf:
-	hse_buf_free(&out_buf);
+	hse_buf_free(out_buf);
 out_free_len_buf:
-	hse_buf_free(&len_buf);
+	hse_buf_free(len_buf);
 out_free_in_buf:
-	hse_buf_free(&in_buf);
+	hse_buf_free(in_buf);
 out:
 	return res;
 }

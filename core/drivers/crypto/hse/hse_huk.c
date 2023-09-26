@@ -73,7 +73,9 @@ static TEE_Result hse_copy_and_extract(hseKeyHandle_t src_handle,
 	TEE_Result ret = TEE_SUCCESS;
 	HSE_SRV_INIT(hseSrvDescriptor_t, srv_desc);
 	uint16_t flags, bit_len;
-	struct hse_buf keyinf, keybuf, keysize, iv;
+	struct hse_buf *keyinf = NULL, *keybuf = NULL, *keysize = NULL,
+		       *iv = NULL;
+	uint16_t huk_size = HSE_HUK_LENGTH;
 	HSE_SRV_INIT(hseSymCipherScheme_t, sym_cipher);
 
 	if (!data)
@@ -97,38 +99,40 @@ static TEE_Result hse_copy_and_extract(hseKeyHandle_t src_handle,
 		return ret;
 	}
 
-	ret = hse_buf_alloc(&keyinf, sizeof(hseKeyInfo_t));
-	if (ret != TEE_SUCCESS)
-		return ret;
+	keyinf = hse_buf_alloc(sizeof(hseKeyInfo_t));
+	if (!keyinf)
+		return TEE_ERROR_OUT_OF_MEMORY;
 
-	ret = hse_buf_alloc(&keybuf, HSE_HUK_LENGTH);
-	if (ret != TEE_SUCCESS)
+	keybuf = hse_buf_alloc(HSE_HUK_LENGTH);
+	if (!keybuf) {
+		ret = TEE_ERROR_OUT_OF_MEMORY;
 		goto out_free_keyinf;
+	}
 
-	ret = hse_buf_alloc(&keysize, sizeof(uint16_t));
-	if (ret != TEE_SUCCESS)
+	keysize = hse_buf_init(&huk_size, sizeof(uint16_t));
+	if (!keysize) {
+		ret = TEE_ERROR_OUT_OF_MEMORY;
 		goto out_free_keybuf;
-	keysize.data[0] = HSE_HUK_LENGTH;
-	cache_operation(TEE_CACHEFLUSH, keysize.data, keysize.size);
+	}
 
-	ret = hse_buf_alloc(&iv, HSE_IV_LENGTH);
-	if (ret != TEE_SUCCESS)
+	iv = hse_buf_alloc(HSE_IV_LENGTH);
+	if (!iv) {
+		ret = TEE_ERROR_OUT_OF_MEMORY;
 		goto out_free_keysize;
-	memset(iv.data, 0, HSE_IV_LENGTH);
-	cache_operation(TEE_CACHEFLUSH, iv.data, iv.size);
+	}
 
 	sym_cipher.cipherAlgo = HSE_CIPHER_ALGO_AES;
 	sym_cipher.cipherBlockMode = HSE_CIPHER_BLOCK_MODE_CTR;
 	sym_cipher.ivLength = HSE_IV_LENGTH;
-	sym_cipher.pIV = iv.paddr;
+	sym_cipher.pIV = hse_buf_get_paddr(iv);
 
 	memset(&srv_desc, 0, sizeof(srv_desc));
 
 	srv_desc.srvId = HSE_SRV_ID_EXPORT_KEY;
 	srv_desc.hseSrv.exportKeyReq.targetKeyHandle = dst_handle;
-	srv_desc.hseSrv.exportKeyReq.pKeyInfo = keyinf.paddr;
-	srv_desc.hseSrv.exportKeyReq.pKey[2] = keybuf.paddr;
-	srv_desc.hseSrv.exportKeyReq.pKeyLen[2] = keysize.paddr;
+	srv_desc.hseSrv.exportKeyReq.pKeyInfo = hse_buf_get_paddr(keyinf);
+	srv_desc.hseSrv.exportKeyReq.pKey[2] = hse_buf_get_paddr(keybuf);
+	srv_desc.hseSrv.exportKeyReq.pKeyLen[2] = hse_buf_get_paddr(keysize);
 	srv_desc.hseSrv.exportKeyReq.cipher.cipherKeyHandle =
 		HSE_ROM_KEY_AES256_KEY1;
 	srv_desc.hseSrv.exportKeyReq.cipher.cipherScheme.symCipher =
@@ -142,21 +146,19 @@ static TEE_Result hse_copy_and_extract(hseKeyHandle_t src_handle,
 		goto out_free_iv;
 	}
 
-	cache_operation(TEE_CACHEINVALIDATE, keybuf.data, keybuf.size);
-
-	memcpy(data, keybuf.data, HSE_HUK_LENGTH);
+	hse_buf_get_data(keybuf, data, HSE_HUK_LENGTH, 0);
 
 out_free_iv:
-	hse_buf_free(&iv);
+	hse_buf_free(iv);
 
 out_free_keysize:
-	hse_buf_free(&keysize);
+	hse_buf_free(keysize);
 
 out_free_keybuf:
-	hse_buf_free(&keybuf);
+	hse_buf_free(keybuf);
 
 out_free_keyinf:
-	hse_buf_free(&keyinf);
+	hse_buf_free(keyinf);
 
 	return ret;
 }

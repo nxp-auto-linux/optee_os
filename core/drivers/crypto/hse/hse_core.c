@@ -639,9 +639,9 @@ static inline TEE_Result hse_check_keylen(struct hse_buf *key0,
 					  struct hse_buf *key1,
 					  struct hse_buf *key2)
 {
-	if ((key0 && key0->size > UINT16_MAX) ||
-	    (key1 && key1->size > UINT16_MAX) ||
-	    (key2 && key2->size > UINT16_MAX))
+	if ((key0 && hse_buf_get_size(key0) > UINT16_MAX) ||
+	    (key1 && hse_buf_get_size(key1) > UINT16_MAX) ||
+	    (key2 && hse_buf_get_size(key2) > UINT16_MAX))
 		return TEE_ERROR_BAD_PARAMETERS;
 
 	return TEE_SUCCESS;
@@ -659,14 +659,8 @@ static inline TEE_Result hse_check_keylen(struct hse_buf *key0,
 static inline void hse_fill_key(struct hse_buf *key_buf, paddr_t *key_paddr,
 				uint16_t *key_len)
 {
-	if (key_buf) {
-		*key_paddr = key_buf->paddr;
-		*key_len = key_buf->size;
-		cache_operation(TEE_CACHEFLUSH, key_buf->data, key_buf->size);
-	} else {
-		*key_paddr = 0;
-		*key_len = 0;
-	}
+	*key_paddr = hse_buf_get_paddr(key_buf);
+	*key_len = hse_buf_get_size(key_buf);
 }
 
 /**
@@ -690,7 +684,7 @@ TEE_Result hse_import_key(hseKeyHandle_t handle, hseKeyInfo_t *key_info,
 	HSE_SRV_INIT(hseSrvDescriptor_t, srv_desc);
 	HSE_SRV_INIT(hseImportKeySrv_t, import_key_req);
 	TEE_Result ret;
-	struct hse_buf keyinfo_buf;
+	struct hse_buf *keyinfo_buf = NULL;
 
 	if (handle == HSE_INVALID_KEY_HANDLE || !key_info)
 		return TEE_ERROR_BAD_PARAMETERS;
@@ -699,14 +693,12 @@ TEE_Result hse_import_key(hseKeyHandle_t handle, hseKeyInfo_t *key_info,
 	if (ret != TEE_SUCCESS)
 		return ret;
 
-	ret = hse_buf_alloc(&keyinfo_buf, sizeof(*key_info));
-	if (ret != TEE_SUCCESS)
-		return ret;
-	memcpy(keyinfo_buf.data, key_info, keyinfo_buf.size);
-	cache_operation(TEE_CACHEFLUSH, keyinfo_buf.data, keyinfo_buf.size);
+	keyinfo_buf = hse_buf_init(key_info, sizeof(*key_info));
+	if (!keyinfo_buf)
+		return TEE_ERROR_OUT_OF_MEMORY;
 
 	import_key_req.targetKeyHandle = handle;
-	import_key_req.pKeyInfo  = keyinfo_buf.paddr;
+	import_key_req.pKeyInfo = hse_buf_get_paddr(keyinfo_buf);
 
 	hse_fill_key(key0, &import_key_req.pKey[0], &import_key_req.keyLen[0]);
 	hse_fill_key(key1, &import_key_req.pKey[1], &import_key_req.keyLen[1]);
@@ -723,7 +715,7 @@ TEE_Result hse_import_key(hseKeyHandle_t handle, hseKeyInfo_t *key_info,
 		DMSG("Key import of type 0x%x failed with err 0x%x",
 		     key_info->keyType, ret);
 
-	hse_buf_free(&keyinfo_buf);
+	hse_buf_free(keyinfo_buf);
 
 	return ret;
 }
@@ -914,7 +906,7 @@ TEE_Result hse_stream_ctx_copy(uint8_t src_stream, uint8_t dst_stream)
 	HSE_SRV_INIT(hseSrvDescriptor_t, srv_desc);
 	hseImportExportStreamCtxSrv_t *stream_srv =
 		&srv_desc.hseSrv.importExportStreamCtx;
-	struct hse_buf io_buf;
+	struct hse_buf *io_buf = NULL;
 	TEE_Result ret;
 
 	if (src_stream >= HSE_STREAM_COUNT || dst_stream >= HSE_STREAM_COUNT)
@@ -923,13 +915,13 @@ TEE_Result hse_stream_ctx_copy(uint8_t src_stream, uint8_t dst_stream)
 	if (!drv->stream_busy[src_stream] || !drv->stream_busy[dst_stream])
 		return TEE_ERROR_BAD_PARAMETERS;
 
-	ret = hse_buf_alloc(&io_buf, MAX_STREAMING_CONTEXT_SIZE);
-	if (ret != TEE_SUCCESS)
-		return ret;
+	io_buf = hse_buf_alloc(MAX_STREAMING_CONTEXT_SIZE);
+	if (!io_buf)
+		return TEE_ERROR_OUT_OF_MEMORY;
 
 	/* Export the context from the source stream in the buffer */
 	srv_desc.srvId = HSE_SRV_ID_IMPORT_EXPORT_STREAM_CTX;
-	stream_srv->pStreamContext = io_buf.paddr;
+	stream_srv->pStreamContext = hse_buf_get_paddr(io_buf);
 	stream_srv->operation = HSE_EXPORT_STREAMING_CONTEXT;
 	stream_srv->streamId = src_stream;
 
@@ -944,7 +936,7 @@ TEE_Result hse_stream_ctx_copy(uint8_t src_stream, uint8_t dst_stream)
 	ret = hse_srv_req_sync(HSE_CHANNEL_ADM, &srv_desc);
 
 out:
-	hse_buf_free(&io_buf);
+	hse_buf_free(io_buf);
 
 	if (ret != TEE_SUCCESS)
 		EMSG("Stream Context Copy failed with err 0x%x", ret);
@@ -960,31 +952,29 @@ static TEE_Result hse_check_fw_version(void)
 {
 	TEE_Result err;
 	HSE_SRV_INIT(hseSrvDescriptor_t, srv_desc);
-	struct hse_buf buf;
+	struct hse_buf *buf = NULL;
+	uint32_t attr_size = sizeof(hseAttrFwVersion_t);
 
-	err = hse_buf_alloc(&buf, sizeof(hseAttrFwVersion_t));
-	if (err != TEE_SUCCESS) {
-		DMSG("failed to allocate buffer: %d\n", err);
-		return err;
+	buf = hse_buf_alloc(attr_size);
+	if (!buf) {
+		DMSG("failed to allocate fw_version buffer");
+		return TEE_ERROR_OUT_OF_MEMORY;
 	}
 
 	srv_desc.srvId = HSE_SRV_ID_GET_ATTR;
 	srv_desc.hseSrv.getAttrReq.attrId = HSE_FW_VERSION_ATTR_ID;
-	srv_desc.hseSrv.getAttrReq.attrLen = buf.size;
-	srv_desc.hseSrv.getAttrReq.pAttr = buf.paddr;
+	srv_desc.hseSrv.getAttrReq.attrLen = attr_size;
+	srv_desc.hseSrv.getAttrReq.pAttr = hse_buf_get_paddr(buf);
 
 	err = hse_srv_req_sync(HSE_CHANNEL_ADM, &srv_desc);
 	if (err) {
 		DMSG("request failed: %d", err);
-		hse_buf_free(&buf);
+		hse_buf_free(buf);
 		return err;
 	}
 
-	cache_operation(TEE_CACHEINVALIDATE, buf.data, buf.size);
-
-	memcpy(&drv->firmware_version, buf.data, buf.size);
-
-	hse_buf_free(&buf);
+	hse_buf_get_data(buf, &drv->firmware_version, attr_size, 0);
+	hse_buf_free(buf);
 
 	return TEE_SUCCESS;
 }

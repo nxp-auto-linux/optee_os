@@ -233,7 +233,7 @@ static TEE_Result hse_import_mackey(struct crypto_mac_ctx *ctx,
 {
 	TEE_Result ret;
 	struct hse_mac_ctx *hse_ctx = to_hse_mac_ctx(ctx);
-	struct hse_buf key_buf;
+	struct hse_buf *key_buf;
 	hseMacAlgo_t mac_algo = hse_ctx->mac_tpl->mac_scheme.macAlgo;
 	hseKeyHandle_t *key_handle = &hse_ctx->key_handle;
 	hseKeyInfo_t key_info = {0};
@@ -258,11 +258,12 @@ static TEE_Result hse_import_mackey(struct crypto_mac_ctx *ctx,
 	if (HSE_BYTES_TO_BITS(key_buf_len) > UINT16_MAX)
 		return TEE_ERROR_BAD_PARAMETERS;
 
-	ret = hse_buf_alloc(&key_buf, key_buf_len);
-	if (ret != TEE_SUCCESS)
+	key_buf = hse_buf_alloc(key_buf_len);
+	if (!key_buf) {
+		ret = TEE_ERROR_OUT_OF_MEMORY;
 		goto out;
-	memset(key_buf.data, 0, key_buf_len);
-	memcpy(key_buf.data, key, len);
+	}
+	hse_buf_put_data(key_buf, key, len, 0);
 
 	key_info.keyFlags = HSE_KF_USAGE_SIGN;
 	key_info.keyBitLen = HSE_BYTES_TO_BITS(key_buf_len);
@@ -270,8 +271,8 @@ static TEE_Result hse_import_mackey(struct crypto_mac_ctx *ctx,
 							     HSE_KEY_TYPE_AES;
 
 	ret = hse_acquire_and_import_key(key_handle, &key_info, NULL, NULL,
-					 &key_buf);
-	hse_buf_free(&key_buf);
+					 key_buf);
+	hse_buf_free(key_buf);
 
 out:
 	if (ret != TEE_SUCCESS)
@@ -351,7 +352,7 @@ static TEE_Result hse_mac_srv_req(struct hse_mac_ctx *hse_ctx,
 	HSE_SRV_INIT(hseSrvDescriptor_t, srv_desc);
 	TEE_Result ret;
 	hseAccessMode_t mode;
-	struct hse_buf in_buf = {0}, out_buf = {0}, len_buf = {0};
+	struct hse_buf *in_buf = NULL, *out_buf = NULL, *len_buf = NULL;
 
 	if (!hse_ctx)
 		return TEE_ERROR_BAD_PARAMETERS;
@@ -364,11 +365,11 @@ static TEE_Result hse_mac_srv_req(struct hse_mac_ctx *hse_ctx,
 		hse_ctx->stream_started = true;
 
 	if (input->length) {
-		ret = hse_buf_alloc(&in_buf, input->length);
-		if (ret != TEE_SUCCESS)
+		in_buf = hse_buf_init(input->data, input->length);
+		if (!in_buf) {
+			ret = TEE_ERROR_OUT_OF_MEMORY;
 			goto out;
-		memcpy(in_buf.data, input->data, input->length);
-		cache_operation(TEE_CACHEFLUSH, in_buf.data, in_buf.size);
+		}
 	}
 
 	srv_desc.srvId = HSE_SRV_ID_MAC;
@@ -378,24 +379,24 @@ static TEE_Result hse_mac_srv_req(struct hse_mac_ctx *hse_ctx,
 	srv_desc.hseSrv.macReq.sgtOption = HSE_SGT_OPTION_NONE;
 	srv_desc.hseSrv.macReq.macScheme = hse_ctx->mac_tpl->mac_scheme;
 	srv_desc.hseSrv.macReq.keyHandle = hse_ctx->key_handle;
-	srv_desc.hseSrv.macReq.inputLength = in_buf.size;
-	srv_desc.hseSrv.macReq.pInput = in_buf.paddr;
+	srv_desc.hseSrv.macReq.inputLength = hse_buf_get_size(in_buf);
+	srv_desc.hseSrv.macReq.pInput = hse_buf_get_paddr(in_buf);
 
 	if (is_final_op) {
-		ret = hse_buf_alloc(&out_buf, digest->length);
-		if (ret != TEE_SUCCESS)
+		out_buf = hse_buf_alloc(digest->length);
+		if (!out_buf) {
+			ret = TEE_ERROR_OUT_OF_MEMORY;
 			goto out_free_input;
-		cache_operation(TEE_CACHEINVALIDATE, out_buf.data,
-				out_buf.size);
+		}
 
-		ret = hse_buf_alloc(&len_buf, sizeof(uint32_t));
-		if (ret != TEE_SUCCESS)
+		len_buf = hse_buf_init(&digest->length, sizeof(uint32_t));
+		if (!len_buf) {
+			ret = TEE_ERROR_OUT_OF_MEMORY;
 			goto out_free_output;
-		memcpy(len_buf.data, &digest->length, len_buf.size);
-		cache_operation(TEE_CACHEFLUSH, len_buf.data, len_buf.size);
+		}
 
-		srv_desc.hseSrv.macReq.pTagLength = len_buf.paddr;
-		srv_desc.hseSrv.macReq.pTag = out_buf.paddr;
+		srv_desc.hseSrv.macReq.pTagLength = hse_buf_get_paddr(len_buf);
+		srv_desc.hseSrv.macReq.pTag = hse_buf_get_paddr(out_buf);
 	}
 
 	ret = hse_srv_req_sync(hse_ctx->channel, &srv_desc);
@@ -406,16 +407,16 @@ static TEE_Result hse_mac_srv_req(struct hse_mac_ctx *hse_ctx,
 	}
 
 	if (is_final_op) {
-		memcpy(&digest->length, len_buf.data, len_buf.size);
-		memcpy(digest->data, out_buf.data, digest->length);
+		hse_buf_get_data(len_buf, &digest->length, sizeof(uint32_t), 0);
+		hse_buf_get_data(out_buf, digest->data, digest->length, 0);
 	}
 
 out_free_len:
-	hse_buf_free(&len_buf);
+	hse_buf_free(len_buf);
 out_free_output:
-	hse_buf_free(&out_buf);
+	hse_buf_free(out_buf);
 out_free_input:
-	hse_buf_free(&in_buf);
+	hse_buf_free(in_buf);
 out:
 	return ret;
 }
