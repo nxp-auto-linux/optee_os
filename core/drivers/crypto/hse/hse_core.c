@@ -5,6 +5,7 @@
 
 #include <arm.h>
 #include <atomic.h>
+#include <config.h>
 #include <hse_interface.h>
 #include <hse_core.h>
 #include <hse_mu.h>
@@ -580,42 +581,51 @@ static TEE_Result hse_keygroups_init(void)
 {
 	TEE_Result err;
 
-	err = hse_keygroup_alloc(HSE_KEY_TYPE_AES,
-				 HSE_KEY_CATALOG_ID_RAM,
-				 CFG_HSE_AES_KEY_GROUP_ID,
-				 CFG_HSE_AES_KEY_GROUP_SIZE);
-	if (err != TEE_SUCCESS)
-		goto free_keygroups;
+	if (IS_ENABLED(CFG_NXP_HSE_CIPHER_DRV) ||
+	    IS_ENABLED(CFG_NXP_HSE_MAC_DRV)) {
+		err =  hse_keygroup_alloc(HSE_KEY_TYPE_AES,
+					  CFG_NXP_HSE_AES_KEYGROUP_CTLG,
+					  CFG_NXP_HSE_AES_KEYGROUP_ID,
+					  CFG_NXP_HSE_AES_KEYGROUP_SIZE);
+		if (err != TEE_SUCCESS)
+			goto free_keygroups;
+	}
 
-	err = hse_keygroup_alloc(HSE_KEY_TYPE_SHARED_SECRET,
-				 HSE_KEY_CATALOG_ID_RAM,
-				 CFG_HSE_SHARED_SECRET_KEY_ID,
-				 CFG_HSE_SHARED_SECRET_GROUP_SIZE);
-	if (err != TEE_SUCCESS)
-		goto free_keygroups;
+	if (IS_ENABLED(CFG_NXP_HSE_HUK_DRV) ||
+	    IS_ENABLED(CFG_NXP_HSE_MAC_DRV)) {
+		err =  hse_keygroup_alloc(HSE_KEY_TYPE_HMAC,
+					  CFG_NXP_HSE_HMAC_KEYGROUP_CTLG,
+					  CFG_NXP_HSE_HMAC_KEYGROUP_ID,
+					  CFG_NXP_HSE_HMAC_KEYGROUP_SIZE);
+		if (err != TEE_SUCCESS)
+			goto free_keygroups;
+	}
 
-	err = hse_keygroup_alloc(HSE_KEY_TYPE_HMAC,
-				 HSE_KEY_CATALOG_ID_RAM,
-				 CFG_HSE_HMAC_KEY_GROUP_ID,
-				 CFG_HSE_HMAC_KEY_GROUP_SIZE);
-	if (err != TEE_SUCCESS)
-		goto free_keygroups;
+	if (IS_ENABLED(CFG_NXP_HSE_HUK_DRV)) {
+		err = hse_keygroup_alloc(HSE_KEY_TYPE_SHARED_SECRET,
+					 CFG_NXP_HSE_SHARED_SECRET_KEYGROUP_CTLG,
+					 CFG_NXP_HSE_SHARED_SECRET_KEYGROUP_ID,
+					 CFG_NXP_HSE_SHARED_SECRET_KEYGROUP_SIZE);
 
-	/* RSA Keys reside only in the NVM Catalog */
-	err = hse_keygroup_alloc(HSE_KEY_TYPE_RSA_PAIR,
-				 HSE_KEY_CATALOG_ID_NVM,
-				 CFG_HSE_RSAPAIR_KEY_GROUP_ID,
-				 CFG_HSE_RSAPAIR_KEY_GROUP_SIZE);
-	if (err != TEE_SUCCESS)
-		goto free_keygroups;
+		if (err != TEE_SUCCESS)
+			goto free_keygroups;
+	}
 
-	err = hse_keygroup_alloc(HSE_KEY_TYPE_RSA_PUB,
-				 HSE_KEY_CATALOG_ID_NVM,
-				 CFG_HSE_RSAPUB_KEY_GROUP_ID,
-				 CFG_HSE_RSAPUB_KEY_GROUP_SIZE);
+	if (IS_ENABLED(CFG_NXP_HSE_RSA_DRV)) {
+		err = hse_keygroup_alloc(HSE_KEY_TYPE_RSA_PAIR,
+					 CFG_NXP_HSE_RSAPAIR_KEYGROUP_CTLG,
+					 CFG_NXP_HSE_RSAPAIR_KEYGROUP_ID,
+					 CFG_NXP_HSE_RSAPAIR_KEYGROUP_SIZE);
+		if (err != TEE_SUCCESS)
+			goto free_keygroups;
 
-	if (err != TEE_SUCCESS)
-		goto free_keygroups;
+		err = hse_keygroup_alloc(HSE_KEY_TYPE_RSA_PUB,
+					 CFG_NXP_HSE_RSAPUB_KEYGROUP_CTLG,
+					 CFG_NXP_HSE_RSAPUB_KEYGROUP_ID,
+					 CFG_NXP_HSE_RSAPUB_KEYGROUP_SIZE);
+		if (err != TEE_SUCCESS)
+			goto free_keygroups;
+	}
 
 	return TEE_SUCCESS;
 
@@ -1004,14 +1014,14 @@ static TEE_Result crypto_driver_init(void)
 	if (!drv->mu) {
 		EMSG("Could not get MU Instance");
 		err = TEE_ERROR_BAD_STATE;
-		goto out_free_drv;
+		goto out_err;
 	}
 
 	status = hse_mu_check_status(drv->mu);
 	if (!(status & HSE_STATUS_INIT_OK)) {
 		EMSG("Firmware not found");
 		err = TEE_ERROR_BAD_STATE;
-		goto out_free_mu;
+		goto out_err;
 	}
 
 	hse_config_channels();
@@ -1021,7 +1031,7 @@ static TEE_Result crypto_driver_init(void)
 
 	err = hse_check_fw_version();
 	if (err != TEE_SUCCESS)
-		goto out_free_mu;
+		goto out_err;
 
 	DMSG("%s firmware, version %d.%d.%d\n",
 	     drv->firmware_version.fwTypeId == 0 ? "standard" :
@@ -1032,63 +1042,78 @@ static TEE_Result crypto_driver_init(void)
 
 	err = hse_keygroups_init();
 	if (err != TEE_SUCCESS)
-		goto out_free_mu;
+		goto out_err;
 
 	if (!(status & HSE_STATUS_RNG_INIT_OK)) {
 		EMSG("HSE RNG bad state");
 		return TEE_ERROR_BAD_STATE;
 	}
 
-	err = hse_rng_initialize();
-	if (err != TEE_SUCCESS) {
-		EMSG("HSE RNG Initialization failed with err 0x%x", err);
-		goto out_free_keygroups;
+	if (IS_ENABLED(CFG_NXP_HSE_RNG_DRV)) {
+		err = hse_rng_initialize();
+		if (err != TEE_SUCCESS) {
+			EMSG("HSE RNG Initialization failed with err 0x%x",
+			     err);
+			goto out_err;
+		}
 	}
 
 	if (!(status & HSE_STATUS_INSTALL_OK)) {
 		EMSG("HSE Key Catalog not formatted");
 		err = TEE_ERROR_BAD_STATE;
-		goto out_free_keygroups;
+		goto out_err;
 	}
 
-	err = hse_cipher_register();
-	if (err != TEE_SUCCESS) {
-		EMSG("HSE Cipher register failed with err 0x%x", err);
-		goto out_free_keygroups;
+	if (IS_ENABLED(CFG_NXP_HSE_CIPHER_DRV)) {
+		err = hse_cipher_register();
+		if (err != TEE_SUCCESS) {
+			EMSG("HSE Cipher register failed with err 0x%x", err);
+			goto out_err;
+		}
 	}
 
-	err = hse_hash_register();
-	if (err != TEE_SUCCESS) {
-		EMSG("HSE Hash register failed with err 0x%x", err);
-		goto out_free_keygroups;
-	}
-	err = hse_rsa_register();
-	if (err != TEE_SUCCESS) {
-		EMSG("HSE RSA register failed with err 0x%x", err);
-		goto out_free_keygroups;
+	if (IS_ENABLED(CFG_NXP_HSE_HASH_DRV)) {
+		err = hse_hash_register();
+		if (err != TEE_SUCCESS) {
+			EMSG("HSE Hash register failed with err 0x%x", err);
+			goto out_err;
+		}
 	}
 
-	err = hse_mac_register();
-	if (err != TEE_SUCCESS) {
-		EMSG("HSE MAC register failed with err 0x%x", err);
-		goto out_free_keygroups;
+	if (IS_ENABLED(CFG_NXP_HSE_MAC_DRV)) {
+		err = hse_mac_register();
+		if (err != TEE_SUCCESS) {
+			EMSG("HSE Cipher register failed with err 0x%x", err);
+			goto out_err;
+		}
 	}
 
-	err = hse_retrieve_huk();
-	if (err != TEE_SUCCESS)
-		IMSG("HSE HUK could not be retrieved. Using default HUK");
+	if (IS_ENABLED(CFG_NXP_HSE_RSA_DRV)) {
+		err = hse_rsa_register();
+		if (err != TEE_SUCCESS) {
+			EMSG("HSE RSA register failed with err 0x%x", err);
+			goto out_err;
+		}
+	}
+
+	if (IS_ENABLED(CFG_NXP_HSE_HUK_DRV)) {
+		err = hse_retrieve_huk();
+		if (err != TEE_SUCCESS)
+			IMSG("HSE HUK could not be retrieved. Using default HUK");
+	}
 
 	IMSG("HSE is successfully initialized");
 
 	return TEE_SUCCESS;
 
-out_free_keygroups:
-	hse_keygroups_destroy();
-out_free_mu:
-	hse_mu_free(drv->mu);
-out_free_drv:
-	free(drv);
 out_err:
+	hse_keygroups_destroy();
+	if (drv->mu)
+		hse_mu_free(drv->mu);
+	if (drv)
+		free(drv);
+
+	EMSG("HSE Crypto Driver init failed with err 0x%x", err);
 	return err;
 }
 
