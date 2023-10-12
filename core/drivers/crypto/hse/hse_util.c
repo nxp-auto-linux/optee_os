@@ -161,6 +161,40 @@ TEE_Result hse_buf_get_data(struct hse_buf *buf, void *data, size_t size,
 }
 
 /**
+ * hse_buf_copy - copies data from a source buffer to a destination buffer
+ * @src: The source buffer
+ * @dst: The destination buffer
+ *
+ * This operation is a wrapper over memcpy
+ * used to copy data of size `size` from hse_buf `dst`
+ * to hse_buf `src`. It also has a few checks for the size
+ * to be valid and the src and dst to be allocated
+ */
+TEE_Result
+hse_buf_copy(struct hse_buf *src, struct hse_buf *dst, uint32_t size)
+{
+	if (!src || !dst)
+		return TEE_ERROR_BAD_PARAMETERS;
+
+	if (dst->size < size || src->size < size)
+		return TEE_ERROR_BAD_PARAMETERS;
+
+	if (dst->data < src->data && dst->data + size > src->data)
+		return TEE_ERROR_BAD_PARAMETERS;
+
+	if (src->data < dst->data && src->data + size > dst->data)
+		return TEE_ERROR_BAD_PARAMETERS;
+
+	cache_operation(TEE_CACHEINVALIDATE, src->data, src->size);
+
+	memcpy(dst->data, src->data, size);
+
+	cache_operation(TEE_CACHEFLUSH, src->data, src->size);
+	cache_operation(TEE_CACHEFLUSH, dst->data, dst->size);
+	return TEE_SUCCESS;
+}
+
+/**
  * hse_buf_init - allocates a hse buffer and copies data into it
  * @data: data to be copied into the hse buffer
  * @size: size of data (in bytes)

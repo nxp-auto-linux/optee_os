@@ -39,6 +39,8 @@ TEE_Result hse_buf_put_data(struct hse_buf *buf, const void *data, size_t size,
 			    size_t offset);
 TEE_Result hse_buf_get_data(struct hse_buf *buf, void *data, size_t size,
 			    size_t offset);
+TEE_Result hse_buf_copy(struct hse_buf *src, struct hse_buf *dst,
+			uint32_t size);
 
 uint32_t hse_buf_get_size(struct hse_buf *buf);
 paddr_t hse_buf_get_paddr(struct hse_buf *buf);
