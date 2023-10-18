@@ -430,7 +430,7 @@ static TEE_Result hse_keygroup_alloc(hseKeyType_t type,
 		slots[i].acquired = false;
 	}
 
-	new_group = calloc(0, sizeof(*new_group));
+	new_group = calloc(1, sizeof(*new_group));
 	if (!new_group) {
 		free(slots);
 		return TEE_ERROR_OUT_OF_MEMORY;
