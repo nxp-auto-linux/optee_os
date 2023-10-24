@@ -25,7 +25,7 @@ struct hse_auth_tpl {
 
 struct hse_authenc_ctx {
 	struct hse_auth_tpl *alg_tpl;
-	uint8_t iv[TEE_AES_MAX_KEY_SIZE];
+	uint8_t *iv;
 	uint32_t iv_len;
 	uint8_t key[TEE_AES_MAX_KEY_SIZE];
 	size_t key_len;
@@ -106,6 +106,8 @@ static void hse_authenc_free_ctx(void *ctx)
 		return;
 
 	hse_buf_free(hse_ctx->aad);
+	if (hse_ctx->iv)
+		free(hse_ctx->iv);
 
 	free(hse_ctx);
 }
@@ -130,7 +132,6 @@ static TEE_Result hse_authenc_alloc_ctx(void **ctx, uint32_t algo)
 	hse_ctx->alg_tpl = alg_tpl;
 	hse_ctx->key_handle = HSE_INVALID_KEY_HANDLE;
 	hse_ctx->stream_id = HSE_STREAM_COUNT;
-	hse_ctx->aad = NULL;
 	*ctx = hse_ctx;
 
 	DMSG("Allocated context for algo %s", alg_tpl->algo_name);
@@ -146,7 +147,10 @@ static void hse_authenc_reset(struct hse_authenc_ctx *hse_ctx)
 {
 	if (hse_ctx->key_handle != HSE_INVALID_KEY_HANDLE)
 		hse_release_and_erase_key(hse_ctx->key_handle);
+	if (hse_ctx->iv)
+		free(hse_ctx->iv);
 
+	hse_ctx->iv = NULL;
 	hse_buf_free(hse_ctx->aad);
 	hse_ctx->aad = NULL;
 	hse_stream_channel_release(hse_ctx->stream_id);
@@ -223,17 +227,25 @@ static TEE_Result hse_authenc_init(struct drvcrypt_authenc_init *dinit)
 			goto out_free_stream;
 		}
 	}
+	hse_ctx->iv = calloc(dinit->nonce.length, sizeof(uint8_t));
+	if (!hse_ctx->iv) {
+		res = TEE_ERROR_OUT_OF_MEMORY;
+		goto out_free_aad;
+	}
+
+	memcpy(hse_ctx->iv, dinit->nonce.data, dinit->nonce.length);
+	hse_ctx->iv_len = dinit->nonce.length;
 	hse_ctx->direction = direction;
 	hse_ctx->tag_len = dinit->tag_len;
 	res = hse_import_authkey(dinit->key, HSE_KEY_TYPE_AES,
 				 direction, &hse_ctx->key_handle);
 	if (res != TEE_SUCCESS)
-		goto out_free_aad;
+		goto out_free_iv;
 
-	memcpy(hse_ctx->iv, dinit->nonce.data, dinit->nonce.length);
-	hse_ctx->iv_len = dinit->nonce.length;
 	return TEE_SUCCESS;
 
+out_free_iv:
+	free(hse_ctx->iv);
 out_free_aad:
 	hse_buf_free(hse_ctx->aad);
 out_free_stream:
