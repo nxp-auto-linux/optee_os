@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: BSD-2-Clause
 /*
  * Copyright (c) 2017, Linaro Limited
+ * Copyright 2023 NXP
  */
 
 #include <assert.h>
@@ -306,7 +307,7 @@ static TEE_Result tadb_update_payload(void *ctx, TEE_OperationMode mode,
 
 	res = crypto_authenc_update_payload(ctx, mode, (const uint8_t *)src,
 					    len, dst, &sz);
-	assert(res || sz == len);
+	assert(res == TEE_SUCCESS);
 	return res;
 }
 
