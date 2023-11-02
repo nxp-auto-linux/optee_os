@@ -48,10 +48,24 @@ $(call force,CFG_CRYPTO_DRV_MAC,y)
 endif
 
 # HSE ECC Driver is disabled by default, to use it set
-# CFG_NXP_HSE_ECC_DRV to y.
+# CFG_NXP_HSE_ECC_DRV to y. The default implementation
+# does not use the ECDH driver, but it can also be
+# enabled manually by setting CFG_NXP_HSE_ECDH_DRV=y
 CFG_NXP_HSE_ECC_DRV ?= n
+CFG_NXP_HSE_ECDH_DRV ?= n
 ifeq ($(CFG_NXP_HSE_ECC_DRV),y)
 $(call force,CFG_CRYPTO_DRV_ECC,y)
+ifeq ($(CFG_NXP_HSE_ECDH_DRV),y)
+# First keyslot from second group(AES) in NVM catalog
+CFG_HSE_ECC_DUMMY_KEK_GROUP_ID ?= 1
+CFG_HSE_ECC_DUMMY_KEK_SLOT_ID ?= 0
+endif
+endif
+
+ifeq ($(CFG_NXP_HSE_ECC_DRV),n)
+ifeq ($(CFG_NXP_HSE_ECDH_DRV),y)
+$(error Can't set CFG_NXP_HSE_ECDH=y without setting CFG_NXP_HSE_ECC_DRV=y)
+endif
 endif
 
 # Enable HSE RSA Driver

@@ -12,8 +12,8 @@
 #include <string.h>
 #include <tee/cache.h>
 
-/* Parameters for 192 bit Weierstrass curve
- * Source: https://neuromancer.sk/std/secg/secp192r1
+/* Parameters for 192 bit and 224 bit Weierstrass curves
+ * Source: https://github.com/J08nY/std-curves
  */
 const uint8_t a_192[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFE, 0xFF, 0xFF,
@@ -33,9 +33,6 @@ const uint8_t n_192[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x99, 0xDE, 0xF8, 0x36, 0x14, 0x6B,
 0xC9, 0xB1, 0xB4, 0xD2, 0x28, 0x31};
 
-/* Parameters for 224 bit Weierstrass curve
- * Source: https://neuromancer.sk/std/secg/secp224r1
- */
 const uint8_t a_224[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFE, 0xFF, 0xFF,
 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFE};
@@ -130,6 +127,20 @@ static hseEccCurveId_t get_curve(uint32_t algo)
 	case TEE_ALG_ECDSA_P521:
 		return HSE_EC_SEC_SECP521R1;
 #endif
+#if CFG_NXP_HSE_ECDH_DRV
+	case TEE_ALG_ECDH_P192:
+		return HSE_EC_USER_CURVE1;
+	case TEE_ALG_ECDH_P224:
+		return HSE_EC_USER_CURVE2;
+	case TEE_ALG_ECDH_P256:
+		return HSE_EC_SEC_SECP256R1;
+#if CFG_HSE_PREMIUM_FW
+	case TEE_ALG_ECDH_P384:
+		return HSE_EC_SEC_SECP384R1;
+	case TEE_ALG_ECDH_P521:
+		return HSE_EC_SEC_SECP521R1;
+#endif
+#endif
 	default:
 		return HSE_EC_CURVE_NONE;
 	}
@@ -144,6 +155,9 @@ static TEE_Result hse_set_curve(uint32_t algo, hseEccCurveId_t curve)
 	HSE_SRV_INIT(hseSrvDescriptor_t, srv_desc);
 
 	switch (algo) {
+#if CFG_NXP_HSE_ECDH_DRV
+	case TEE_ALG_ECDH_P192:
+#endif
 	case TEE_ALG_ECDSA_P192:
 		bitlen = HSE_KEY192_BITS;
 		p = hse_buf_init(p_192, sizeof(p_192));
@@ -162,6 +176,9 @@ static TEE_Result hse_set_curve(uint32_t algo, hseEccCurveId_t curve)
 		if (!n)
 			goto out_free_g;
 	break;
+#if CFG_NXP_HSE_ECDH_DRV
+	case TEE_ALG_ECDH_P224:
+#endif
 	case TEE_ALG_ECDSA_P224:
 	bitlen = HSE_KEY224_BITS;
 		p = hse_buf_init(p_224, sizeof(p_224));
@@ -180,8 +197,11 @@ static TEE_Result hse_set_curve(uint32_t algo, hseEccCurveId_t curve)
 		if (!n)
 			goto out_free_g;
 	break;
+	case TEE_ALG_ECDH_P256:
 	case TEE_ALG_ECDSA_P256:
+	case TEE_ALG_ECDH_P384:
 	case TEE_ALG_ECDSA_P384:
+	case TEE_ALG_ECDH_P521:
 	case TEE_ALG_ECDSA_P521:
 		return TEE_SUCCESS;
 	default:
@@ -508,11 +528,307 @@ static TEE_Result hse_ecc_verify(struct drvcrypt_sign_data *sdata)
 	return hse_ecc_sign_operation(sdata, HSE_AUTH_DIR_VERIFY);
 }
 
+#if CFG_NXP_HSE_ECDH_DRV
+static TEE_Result hse_import_privkey(struct ecc_keypair *key,
+				     hseKeyHandle_t *key_handle,
+				     hseKeyFlags_t flags,
+				     hseEccCurveId_t curve,
+				     size_t key_size)
+{
+	TEE_Result res = TEE_ERROR_BAD_PARAMETERS;
+	size_t d_len;
+	struct hse_buf *pub_key = NULL, *y = NULL, *d = NULL;
+	size_t min_keylen = HSE_BITS_TO_BYTES(HSE_MIN_ECC_KEY_BITS_LEN);
+	size_t max_keylen = HSE_BITS_TO_BYTES(HSE_MAX_ECC_KEY_BITS_LEN);
+	hseKeyBits_t bitlen;
+
+	d_len = crypto_bignum_num_bytes(key->d);
+	if (d_len > key_size)
+		return TEE_ERROR_BAD_PARAMETERS;
+
+	if (key_size > max_keylen || key_size < min_keylen)
+		return TEE_ERROR_BAD_PARAMETERS;
+
+	bitlen = hse_get_bitlen(key->curve);
+	if (bitlen == HSE_KEY_BITS_INVALID)
+		return TEE_ERROR_BAD_PARAMETERS;
+
+	crypto_bignum_bn2bin(key->d, bin_key_param);
+	d = hse_buf_init(bin_key_param, d_len);
+	if (!d)
+		goto out;
+
+	res = hse_import_ecckey(pub_key, y, d, key_handle, flags,
+				HSE_KEY_TYPE_ECC_PAIR, curve, bitlen);
+	hse_buf_free(d);
+out:
+	return res;
+}
+
+static TEE_Result hse_derivecopy_and_export(hseKeyHandle_t key_handle,
+					    hseKeyHandle_t dummy_kek_handle,
+					    uint8_t *exported_buf,
+					    size_t exported_buf_len)
+{
+	hseKeyHandle_t copied_key_handle;
+	TEE_Result ret = TEE_SUCCESS;
+	hseKeyDeriveCopyKeySrv_t *copy_req = NULL;
+	hseExportKeySrv_t *export_req = NULL;
+	struct hse_buf *exported_key_inf = NULL, *exported_key_buf = NULL,
+				*exported_key_size = NULL, *iv = NULL;
+
+	HSE_SRV_INIT(hseSrvDescriptor_t, srv_desc);
+	HSE_SRV_INIT(hseSymCipherScheme_t, sym_cipher);
+
+	if (!exported_buf || !exported_buf_len)
+		return TEE_ERROR_BAD_PARAMETERS;
+
+	/* Make a copy into a key of type other than HSE_KEY_TYPE_SHARED_SECRET.
+	 * HMAC is a good choice because it does not restrict the ley length.
+	 */
+
+	copied_key_handle = hse_keyslot_acquire(HSE_KEY_TYPE_HMAC);
+	if (copied_key_handle == HSE_INVALID_KEY_HANDLE) {
+		EMSG("Error acquiring key slot for DeriveCopy");
+		ret = TEE_ERROR_STORAGE_NOT_AVAILABLE;
+		goto out;
+	}
+	hse_erase_key(copied_key_handle);
+	srv_desc.srvId = HSE_SRV_ID_KEY_DERIVE_COPY;
+	copy_req = &srv_desc.hseSrv.keyDeriveCopyKeyReq;
+	copy_req->keyHandle = key_handle;
+	copy_req->startOffset = 0;
+	copy_req->targetKeyHandle = copied_key_handle;
+	/* Must have a KF_USAGE flag, otherwise DeriveCopy will fail.
+	 * We don't really care about the flags we're setting on the target key,
+	 * as all we want from it is to be eventually exported.
+	 */
+	copy_req->keyInfo.keyFlags = HSE_KF_ACCESS_EXPORTABLE |
+					HSE_KF_USAGE_SIGN | HSE_KF_USAGE_VERIFY;
+	copy_req->keyInfo.keyBitLen = HSE_BYTES_TO_BITS(exported_buf_len);
+	copy_req->keyInfo.keyType = HSE_KEY_TYPE_HMAC;
+
+	ret = hse_srv_req_sync(HSE_CHANNEL_ANY, &srv_desc);
+	if (ret != TEE_SUCCESS) {
+		EMSG("DeriveCopy error");
+		goto err_derive_copy;
+	}
+	DMSG("DeriveCopy success");
+
+	/* Export the new key */
+	ret = TEE_ERROR_OUT_OF_MEMORY;
+	exported_key_inf = hse_buf_alloc(sizeof(hseKeyInfo_t));
+	if (!exported_key_inf) {
+		EMSG("Error allocating exported keyInfo");
+		goto err_alloc_exported_key_inf;
+	}
+
+	exported_key_buf = hse_buf_alloc(exported_buf_len);
+	if (!exported_key_buf) {
+		EMSG("Error allocating exported buf data");
+		goto err_alloc_exported_key_buf;
+	}
+
+	exported_key_size = hse_buf_init(&exported_buf_len, sizeof(uint32_t));
+	if (!exported_key_size) {
+		EMSG("Error allocating exported key size");
+		goto err_alloc_exported_key_size;
+	}
+	/* pKeyLen[2] is an INPUT/OUTPUT field to hseExportKeySrv_t;
+	 * this here is the INPUT part
+	 */
+	iv = hse_buf_alloc(HSE_IV_LENGTH);
+	if (!iv) {
+		EMSG("Error allocating IV");
+		goto err_alloc_iv;
+	}
+	memset(&srv_desc, 0, sizeof(srv_desc));
+	export_req = &srv_desc.hseSrv.exportKeyReq;
+
+	srv_desc.srvId = HSE_SRV_ID_EXPORT_KEY;
+
+	sym_cipher.cipherAlgo = HSE_CIPHER_ALGO_AES;
+	sym_cipher.cipherBlockMode = HSE_CIPHER_BLOCK_MODE_CTR;
+	sym_cipher.ivLength = HSE_IV_LENGTH;
+	sym_cipher.pIV = hse_buf_get_paddr(iv);
+
+	export_req->targetKeyHandle = copied_key_handle;
+	export_req->pKeyInfo = hse_buf_get_paddr(exported_key_inf);
+	export_req->pKey[2] = hse_buf_get_paddr(exported_key_buf);
+	export_req->pKeyLen[2] = hse_buf_get_paddr(exported_key_size);
+	export_req->cipher.cipherKeyHandle = dummy_kek_handle;
+	export_req->cipher.cipherScheme.symCipher = sym_cipher;
+	export_req->keyContainer.authKeyHandle = HSE_INVALID_KEY_HANDLE;
+
+	DMSG("Executing key export...");
+	ret = hse_srv_req_sync(HSE_CHANNEL_ANY, &srv_desc);
+	if (ret != TEE_SUCCESS) {
+		EMSG("HSE export failed");
+		goto err_key_export;
+	}
+
+	/* if successful, retrieve the exported (and encrypted!) key */
+	ret = hse_buf_get_data(exported_key_buf, exported_buf,
+			       exported_buf_len, 0);
+
+	DMSG("Successfully copied exported key on %ld bytes", exported_buf_len);
+
+err_key_export:
+	hse_buf_free(iv);
+err_alloc_iv:
+	hse_buf_free(exported_key_size);
+err_alloc_exported_key_size:
+	hse_buf_free(exported_key_buf);
+err_alloc_exported_key_buf:
+	hse_buf_free(exported_key_inf);
+err_alloc_exported_key_inf:
+err_derive_copy:
+	hse_keyslot_release(copied_key_handle);
+out:
+	return ret;
+}
+
+static TEE_Result import_dummy_kek(hseKeyHandle_t dummy_kek, size_t kek_size)
+{
+	TEE_Result ret = TEE_SUCCESS;
+	hseKeyInfo_t dummy_kek_info = {0};
+	struct hse_buf *dummy_kek_buf = NULL;
+
+	if (dummy_kek == HSE_INVALID_KEY_HANDLE) {
+		EMSG("Invalid key handle received");
+		return TEE_ERROR_BAD_PARAMETERS;
+	}
+
+	if (GET_CATALOG_ID(dummy_kek) != HSE_KEY_CATALOG_ID_NVM) {
+		EMSG("You must provide a keyhandle from NVM Catalog");
+		return TEE_ERROR_BAD_PARAMETERS;
+	}
+
+	dummy_kek_buf = hse_buf_alloc(kek_size);
+	if (!dummy_kek_buf) {
+		EMSG("Buffset allocation/memset error");
+		return TEE_ERROR_OUT_OF_MEMORY;
+	}
+
+	dummy_kek_info.keyFlags = HSE_KF_USAGE_ENCRYPT |
+				HSE_KF_USAGE_KEY_PROVISION;
+	dummy_kek_info.keyBitLen = (uint16_t)HSE_BYTES_TO_BITS(kek_size);
+	dummy_kek_info.keyType = HSE_KEY_TYPE_AES;
+
+	ret = hse_import_key(dummy_kek, &dummy_kek_info, NULL, NULL,
+			     dummy_kek_buf);
+	if (ret != TEE_SUCCESS)
+		EMSG("Error importing dummy KEK");
+
+	hse_buf_free(dummy_kek_buf);
+	return ret;
+}
+
+static TEE_Result hse_ecc_shared_secret(struct drvcrypt_secret_data *sdata)
+{
+	HSE_SRV_INIT(hseSrvDescriptor_t, srv_desc);
+	TEE_Result res = TEE_SUCCESS;
+	hseKeyHandle_t pub_key, priv_key, dest_key, dummy_kek;
+	hseEccCurveId_t curve;
+	uint32_t algo;
+
+	switch (sdata->size_sec) {
+	case 24:
+		curve = get_curve(TEE_ALG_ECDH_P192);
+		algo = TEE_ALG_ECDH_P192;
+		break;
+	case 28:
+		curve = get_curve(TEE_ALG_ECDH_P224);
+		algo = TEE_ALG_ECDH_P224;
+		break;
+	case 32:
+		curve = get_curve(TEE_ALG_ECDH_P256);
+		algo = TEE_ALG_ECDH_P256;
+		break;
+	case 48:
+		curve = get_curve(TEE_ALG_ECDH_P384);
+		algo = TEE_ALG_ECDH_P384;
+		break;
+	case 66:
+		curve = get_curve(TEE_ALG_ECDH_P521);
+		algo = TEE_ALG_ECDH_P521;
+		break;
+	default:
+		return TEE_ERROR_BAD_PARAMETERS;
+	}
+	if (!curve)
+		return TEE_ERROR_BAD_PARAMETERS;
+	if (curve == HSE_EC_USER_CURVE1 || curve == HSE_EC_USER_CURVE2) {
+		res = hse_set_curve(algo, curve);
+		if (res != TEE_SUCCESS)
+			goto out;
+	}
+
+	if (!sdata->key_priv || !sdata->key_pub || !sdata->secret.data)
+		return TEE_ERROR_BAD_PARAMETERS;
+
+	res = hse_import_pubkey(sdata->key_pub, &pub_key,
+				HSE_KF_USAGE_EXCHANGE, curve, sdata->size_sec);
+	if (res != TEE_SUCCESS)
+		goto out;
+
+	res = hse_import_privkey(sdata->key_priv, &priv_key,
+				 HSE_KF_USAGE_EXCHANGE, curve, sdata->size_sec);
+	if (res != TEE_SUCCESS)
+		goto out_free_pubkey;
+
+	dest_key = hse_keyslot_acquire(HSE_KEY_TYPE_SHARED_SECRET);
+	if (dest_key == HSE_INVALID_KEY_HANDLE) {
+		res = TEE_ERROR_STORAGE_NO_SPACE;
+		goto out_free_privkey;
+	}
+	hse_erase_key(dest_key);
+	srv_desc.srvId = HSE_SRV_ID_DH_COMPUTE_SHARED_SECRET;
+	srv_desc.hseSrv.dhComputeSecretReq.peerPubKeyHandle = pub_key;
+	srv_desc.hseSrv.dhComputeSecretReq.privKeyHandle = priv_key;
+	srv_desc.hseSrv.dhComputeSecretReq.targetKeyHandle = dest_key;
+
+	res = hse_srv_req_sync(HSE_CHANNEL_ANY, &srv_desc);
+	if (res) {
+		EMSG("HSE DH shared secret req failed with err 0x%x", res);
+		goto out_free_dstkey;
+	}
+	dummy_kek = dest_key;
+	dummy_kek = GET_KEY_HANDLE(HSE_KEY_CATALOG_ID_NVM,
+				   CFG_HSE_ECC_DUMMY_KEK_GROUP_ID,
+				   CFG_HSE_ECC_DUMMY_KEK_SLOT_ID);
+	hse_erase_key(dummy_kek);
+	res = import_dummy_kek(dummy_kek, DUMMY_AES_KEK_SIZE);
+	if (res != TEE_SUCCESS)
+		goto out_free_dummy;
+
+	res = hse_derivecopy_and_export(dest_key, dummy_kek,
+					sdata->secret.data, sdata->size_sec);
+	if (res != TEE_SUCCESS) {
+		EMSG("Error derive, copy & exporting");
+		goto out_free_dummy;
+	}
+	sdata->secret.length = sdata->size_sec;
+	DMSG("Dumping exported (encrypted) secret ...");
+	DHEXDUMP(sdata->secret.data, sdata->size_sec);
+out_free_dummy:
+	hse_release_and_erase_key(dummy_kek);
+out_free_dstkey:
+	hse_keyslot_release(dest_key);
+out_free_privkey:
+	hse_release_and_erase_key(priv_key);
+out_free_pubkey:
+	hse_release_and_erase_key(pub_key);
+out:
+	return res;
+}
+#else
 static TEE_Result
 hse_ecc_shared_secret(struct drvcrypt_secret_data *sdata __unused)
 {
 	return TEE_SUCCESS;
 }
+#endif
 
 static struct drvcrypt_ecc hse_ecc = {
 	.alloc_keypair = hse_alloc_keypair,
