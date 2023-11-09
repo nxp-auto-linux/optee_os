@@ -106,10 +106,10 @@ endef
 # drivers do not need to use persistent keys. RSA/ECC keygroups can only reside in the
 # NVM catalog (HSE Firmware limitation)
 
-$(eval $(call hse-keygroup-define, HMAC, $(HSE_RAM_CATALOG), 1, 6))
+$(eval $(call hse-keygroup-define, HMAC, $(HSE_RAM_CATALOG), 4, 3))
 $(eval $(call hse-keygroup-define, AES, $(HSE_RAM_CATALOG), 2, 7))
 $(eval $(call hse-keygroup-define, SHARED_SECRET, $(HSE_RAM_CATALOG), 3, 1))
-$(eval $(call hse-keygroup-define, RSAPAIR, $(HSE_NVM_CATALOG), 6, 2))
-$(eval $(call hse-keygroup-define, RSAPUB, $(HSE_NVM_CATALOG), 7, 2))
+$(eval $(call hse-keygroup-define, RSAPAIR, $(HSE_NVM_CATALOG), 12, 2))
+$(eval $(call hse-keygroup-define, RSAPUB, $(HSE_NVM_CATALOG), 13, 2))
 
 endif # CFG_NXP_HSE
