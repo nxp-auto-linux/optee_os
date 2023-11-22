@@ -9,6 +9,9 @@ $(error Path to HSE Firmware Package not set. Please use the \
 HSE Firmware Package corresponding to PLATFORM_FLAVOR=$(PLATFORM_FLAVOR))
 endif
 
+# Enable BestFit algorithm for memory alignment
+CFG_CORE_BGET_BESTFIT=y
+
 # Determine if the HSE Firmware Version is Premium or Standard
 HSE_FWTYPE_STR=$(shell grep -r '\#define HSE_FWTYPE' $(CFG_NXP_HSE_FWDIR)/interface/config/hse_target.h \
 		| sed 's/.*\(PREMIUM\|STANDARD\).*/\1/')

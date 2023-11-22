@@ -14,7 +14,7 @@
 #include <malloc.h>
 
 #define HASH_MAX_BLK_SIZE 128
-#define MAX_INPUT_BUF_SIZE (HASH_MAX_BLK_SIZE * 20)
+#define MAX_INPUT_BUF_SIZE (HASH_MAX_BLK_SIZE * 50)
 
 struct hse_hash_tpl {
 	char hash_name[128];
